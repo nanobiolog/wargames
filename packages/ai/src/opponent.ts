@@ -1,7 +1,7 @@
 import { describeCommand, type AiStatus, type Command, type GameEvent, type PlanProposal, type Side } from '@coldlaunch/shared';
 import type { Game, CommandResult } from '@coldlaunch/engine';
 import { GAME_TOOLS, toolCallToCommand } from './tools.ts';
-import type { LlmProvider } from './providers.ts';
+import { describeAiError, isNetworkError, type LlmProvider } from './providers.ts';
 import { RuleBrain } from './rules.ts';
 import { situationReport, opponentSystemPrompt, advisorSystemPrompt } from './situation.ts';
 
@@ -32,6 +32,8 @@ export class AiOpponent {
   private lastCall = 0;
   private triggered = false;
   private failures = 0;
+  /** real-time backoff after failed calls (ms epoch) — event triggers can't bypass it */
+  private retryAt = 0;
   private rules: RuleBrain;
   status: AiStatus;
   private detach?: () => void;
@@ -81,6 +83,11 @@ export class AiOpponent {
     const due = g.s.t >= this.nextT || this.triggered;
     if (!due || this.busy) return;
     if (this.llm !== 'rules' && Date.now() - this.lastCall < (this.opts.minIntervalMs ?? 6000)) return;
+    if (this.llm !== 'rules' && Date.now() < this.retryAt) {
+      // provider unreachable: the doctrine AI keeps playing on its normal cadence until the backoff expires
+      if (g.s.t >= this.nextT || this.triggered) { this.triggered = false; this.nextT = g.s.t + 30; this.runRules(g, evs); }
+      return;
+    }
     this.triggered = false;
     this.nextT = g.s.t + cadence;
     if (this.llm === 'rules') {
@@ -118,17 +125,28 @@ export class AiOpponent {
       if (llm.price) this.status.costUsd += (res.inTok * llm.price[0] + res.outTok * llm.price[1]) / 1e6;
       this.status.lastError = undefined;
       this.status.lastNote = res.text.slice(0, 200) || undefined;
+      if (this.failures) {
+        this.opts.log?.(`[${this.side} AI] ${llm.provider} reachable again`);
+        if (this.host.game === g) g.emit({ kind: 'info', text: `AI OPPONENT LINK RESTORED (${llm.provider}:${llm.model})` });
+      }
       this.failures = 0;
+      this.retryAt = 0;
       const cmds = res.calls.map(toolCallToCommand).filter((c): c is Command => !!c).slice(0, 8);
       if (this.host.game === g) this.exec(cmds, llm.provider);
       if (res.text) this.opts.log?.(`[${this.side} AI] ${res.text}`);
     } catch (e) {
       this.failures++;
-      this.status.lastError = String((e as Error).message ?? e).slice(0, 160);
-      this.opts.log?.(`[${this.side} AI] error: ${this.status.lastError}`);
+      this.status.lastError = describeAiError(e, llm.provider).slice(0, 160);
+      // back off: 15 s, 30 s, 1 min, 2 min … up to 5 min (network errors) / 10 min (API errors)
+      const cap = isNetworkError(e) ? 300_000 : 600_000;
+      const wait = Math.min(cap, 15_000 * 2 ** (this.failures - 1));
+      this.retryAt = Date.now() + wait;
+      this.opts.log?.(`[${this.side} AI] ${this.status.lastError} — retry in ${Math.round(wait / 1000)} s`);
+      if (this.failures === 1 && this.host.game === g) {
+        g.emit({ kind: 'warn', text: `AI OPPONENT LINK DOWN: ${this.status.lastError}` });
+      }
       // fall back to doctrine so the opponent never freezes
       if (this.host.game === g) this.runRules(g, []);
-      if (this.failures >= 3) this.nextT = g.s.t + 600;
     } finally {
       this.busy = false;
       this.status.thinking = false;
@@ -148,7 +166,7 @@ export function makeAdvisor(llm: LlmProvider) {
       const summary = (res.text.split('\n')[0] || (cmds.length ? `${cmds.length} ORDER(S) PREPARED` : 'NO ACTION')).slice(0, 300);
       return { id: `plan${++seq}`, summary, cmds };
     } catch (e) {
-      return { error: `ADVISOR ERROR: ${(e as Error).message}` };
+      return { error: `ADVISOR ERROR — ${describeAiError(e, llm.provider)}`.replace('Built-in doctrine AI is covering.', 'You can still type orders directly (help).') };
     }
   };
 }
