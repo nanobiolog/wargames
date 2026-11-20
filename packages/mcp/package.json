@@ -1,0 +1,12 @@
+{
+  "name": "@coldlaunch/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@coldlaunch/shared": "*",
+    "@coldlaunch/ai": "*",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^3.25.0"
+  }
+}

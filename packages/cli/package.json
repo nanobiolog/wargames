@@ -1,0 +1,12 @@
+{
+  "name": "@coldlaunch/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@coldlaunch/shared": "*",
+    "@coldlaunch/engine": "*",
+    "@coldlaunch/ai": "*",
+    "@coldlaunch/tui": "*"
+  }
+}

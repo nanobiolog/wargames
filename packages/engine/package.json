@@ -1,0 +1,14 @@
+{
+  "name": "@coldlaunch/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@coldlaunch/shared": "*",
+    "@coldlaunch/data": "*",
+    "ws": "^8.18.0"
+  }
+}

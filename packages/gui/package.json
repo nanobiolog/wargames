@@ -1,0 +1,19 @@
+{
+  "name": "@coldlaunch/gui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "STRATCOM // COLD LAUNCH — vector wall display",
+  "main": "main.cjs",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@coldlaunch/shared": "*"
+  },
+  "devDependencies": {
+    "electron": "^45.4.1",
+    "vite": "^8.3.8"
+  }
+}

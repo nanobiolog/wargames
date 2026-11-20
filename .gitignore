@@ -1,0 +1,8 @@
+node_modules/
+dist/
+out/
+packages/data/raw/
+*.log
+.DS_Store
+saves/
+.env

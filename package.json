@@ -1,0 +1,32 @@
+{
+  "name": "coldlaunch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "STRATCOM // COLD LAUNCH — a 1983 strategic command game for your terminal with a vector wall display",
+  "workspaces": [
+    "packages/*"
+  ],
+  "bin": {
+    "coldlaunch": "bin/coldlaunch.mjs"
+  },
+  "scripts": {
+    "start": "tsx packages/cli/src/main.ts",
+    "server": "tsx packages/cli/src/main.ts --no-tui",
+    "geo": "tsx packages/data/scripts/build-geo.ts",
+    "gui": "npm run start -w @coldlaunch/gui",
+    "gui:build": "npm run build -w @coldlaunch/gui",
+    "sim": "tsx packages/cli/src/headless.ts",
+    "mcp": "tsx packages/mcp/src/index.ts",
+    "ai:smoke": "tsx packages/ai/src/smoke.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.0"
+  }
+}
