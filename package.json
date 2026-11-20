@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "STRATCOM // COLD LAUNCH — a 1983 strategic command game for your terminal with a vector wall display",
+  "description": "STRATCOM // COLD LAUNCH — a 1983 strategic command game: terminal console, glowing vector war-room wall display (Electron or browser, multi-monitor), Gemini/Claude AI opponents and MCP",
   "workspaces": [
     "packages/*"
   ],
@@ -12,6 +12,8 @@
   },
   "scripts": {
     "start": "tsx packages/cli/src/main.ts",
+    "setup": "tsx packages/cli/src/setup.ts",
+    "web": "tsx packages/cli/src/main.ts --display browser",
     "server": "tsx packages/cli/src/main.ts --no-tui",
     "geo": "tsx packages/data/scripts/build-geo.ts",
     "gui": "npm run start -w @coldlaunch/gui",
@@ -28,5 +30,20 @@
     "tsx": "^4.20.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.0"
-  }
+  },
+  "keywords": [
+    "game",
+    "wargame",
+    "cold-war",
+    "strategy",
+    "terminal",
+    "tui",
+    "webgl",
+    "electron",
+    "gemini",
+    "claude",
+    "mcp",
+    "vector-graphics",
+    "retro"
+  ]
 }

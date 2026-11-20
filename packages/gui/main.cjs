@@ -4,6 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 const DIST = path.join(__dirname, 'dist');
+const SHOT_SIZE = (process.env.COLDLAUNCH_SHOT_SIZE || '').split('x').map(Number);
 const SCHEME = 'coldlaunch';
 
 protocol.registerSchemesAsPrivileged([
@@ -23,8 +24,9 @@ function findLink(argv) {
 
 function createWindow(link, opts = {}) {
   const win = new BrowserWindow({
-    width: opts.width ?? 1600,
-    height: opts.height ?? 960,
+    width: opts.width ?? (SHOT_SIZE[0] || 1600),
+    height: opts.height ?? (SHOT_SIZE[1] || 960),
+    show: !process.env.COLDLAUNCH_SCREENSHOT_HIDDEN,
     backgroundColor: '#000000',
     title: 'STRATCOM // COLD LAUNCH',
     autoHideMenuBar: true,
@@ -38,7 +40,7 @@ function createWindow(link, opts = {}) {
   const q = new URLSearchParams();
   if (link) q.set('link', link);
   if (opts.preset) q.set('preset', opts.preset);
-  win.loadURL(`app://wall/index.html?${q.toString()}`);
+  win.loadURL(process.env.COLDLAUNCH_SHOT_URL || `app://wall/index.html?${q.toString()}`);
   // external links open in the system browser, never inside the app
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) shell.openExternal(url);
@@ -112,7 +114,10 @@ ipcMain.handle('wall:set-link', (_e, link) => {
   currentLink = String(link);
 });
 
-const gotLock = app.requestSingleInstanceLock();
+// Screenshot/test runs use a throwaway profile so they never hand off to (or disturb) a running wall display.
+const SHOT_MODE = !!process.env.COLDLAUNCH_SCREENSHOT;
+if (SHOT_MODE) app.setPath('userData', path.join(require('node:os').tmpdir(), `coldlaunch-shot-${process.pid}`));
+const gotLock = SHOT_MODE || app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
@@ -140,7 +145,9 @@ if (!gotLock) {
       if (!file.startsWith(DIST)) return new Response('forbidden', { status: 403 });
       return net.fetch(pathToFileURL(file).toString());
     });
-    if (process.defaultApp) {
+    if (SHOT_MODE) {
+      // don't register the URL scheme from throwaway runs
+    } else if (process.defaultApp) {
       app.setAsDefaultProtocolClient(SCHEME, process.execPath, [path.resolve(__dirname)]);
     } else {
       app.setAsDefaultProtocolClient(SCHEME);

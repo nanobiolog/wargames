@@ -27,6 +27,7 @@ export interface AiConfig {
   opponent?: string;
   advisor?: string;
   personality?: number;
+  display?: 'electron' | 'browser' | 'none';
 }
 
 /** ~/.coldlaunch/config.json (keys never leave this process except to their own provider). */

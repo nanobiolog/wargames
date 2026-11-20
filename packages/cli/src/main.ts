@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_PORT, GameClient, enemyOf, type Side, type Role } from '@coldlaunch/shared';
+import { DEFAULT_PORT, GameClient, enemyOf, parseLink, type Side, type Role } from '@coldlaunch/shared';
 import { Game, GameServer } from '@coldlaunch/engine';
 import { AiOpponent, loadConfig, makeAdvisor, makeProvider } from '@coldlaunch/ai';
 import { TuiApp } from '@coldlaunch/tui';
@@ -41,13 +41,14 @@ if (flag('--help') || flag('-h')) {
   --port N                 websocket port (default ${DEFAULT_PORT})
   --seed N                 deterministic scenario seed
   --no-gui                 don't open the Electron wall display
-  --web                    open the wall display in your browser instead of Electron
+  --display <mode>         electron (default) | browser (a browser tab) | none — save a default with npm run setup
+  --web, --browser         same as --display browser
   --all-monitors           Electron: one fullscreen window per monitor (wall, CONUS, missiles, stats, ...)
   --host 0.0.0.0           allow other devices on your LAN to join (token still required)
   --no-tui                 run the server only and print the session link
   --join <link>            connect this terminal to an existing session
 
-  Keys: GEMINI_API_KEY, ANTHROPIC_API_KEY (or ~/.coldlaunch/config.json)`);
+  API keys: run "npm run setup" (saved to ~/.coldlaunch/config.json), or set GEMINI_API_KEY / ANTHROPIC_API_KEY`);
   process.exit(0);
 }
 
@@ -79,12 +80,20 @@ function openGui(link: string, allMonitors = false) {
   return true;
 }
 
+function openBrowser(url: string) {
+  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
+  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+  spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
+}
+
 async function main() {
   const joinLink = opt('--join');
   if (joinLink) {
     const client = new GameClient('tui');
     await client.connect(joinLink, opt('--side') as Role | undefined);
-    new TuiApp(client, { openGui: () => openGui(joinLink) }).start();
+    const p = parseLink(joinLink);
+    const webUrl = p ? `http://${p.host}:${p.port}/?token=${p.token}${p.role ? `&role=${p.role}` : ''}` : undefined;
+    new TuiApp(client, { openGui: () => openGui(joinLink), openWeb: webUrl ? (preset) => openBrowser(`${webUrl}${preset ? `&preset=${preset}` : ''}`) : undefined }).start();
     return;
   }
 
@@ -127,10 +136,15 @@ async function main() {
   writeFileSync(sessionFile, JSON.stringify({ link, web, side: role, pid: process.pid }));
   chmodSync(sessionFile, 0o600);
   log(`web wall display: ${web}`);
-  if (flag('--web')) {
-    // open in the default browser instead of Electron
-    spawn(process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open', [web], { detached: true, stdio: 'ignore' }).unref();
-  } else if (!flag('--no-gui')) openGui(link, flag('--all-monitors'));
+  // display mode: electron (default) | browser | none — flag, env or saved config
+  let display = (opt('--display') ?? process.env.COLDLAUNCH_DISPLAY ?? cfg.display ?? 'electron').toLowerCase();
+  if (flag('--web') || flag('--browser')) display = 'browser';
+  if (flag('--no-gui')) display = 'none';
+  const openWall = (preset?: string) => {
+    if (display === 'browser') openBrowser(server.webLink(role, preset));
+    else if (!openGui(link, flag('--all-monitors'))) openBrowser(server.webLink(role, preset)); // fall back to a browser tab
+  };
+  if (display !== 'none') openWall();
 
   if (!useTui) {
     console.log(`\n  STRATCOM // COLD LAUNCH — server running\n  session link : ${link}\n  browser      : ${web}\n  presets      : add &preset=conus|europe|missiles|stats|world|polar|... per monitor\n  terminal     : npm start -- --join ${link}\n`);
@@ -138,7 +152,11 @@ async function main() {
   }
   const client = new GameClient('tui');
   await client.connect(link, role);
-  const app = new TuiApp(client, { openGui: () => openGui(link), onQuit: () => server.stop() });
+  const app = new TuiApp(client, {
+    openGui: () => openWall(),
+    openWeb: (preset) => openBrowser(server.webLink(role, preset)),
+    onQuit: () => server.stop(),
+  });
   app.start();
 }
 

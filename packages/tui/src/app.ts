@@ -41,7 +41,8 @@ const LOCAL_HELP: [string, string][] = [
   ['list [kind|enemy]', 'list your units (silo airbase bomber ssbn ssn carrier ...)'],
   ['ask <anything>', 'natural-language orders via your AI advisor'],
   ['focus', 'fly the GUI wall display to the current view'],
-  ['gui | link', 'open the Electron wall display / show session link'],
+  ['gui | web [preset]', 'open the wall display (Electron / browser tab, e.g. web conus)'],
+  ['link | keys', 'show session link / how to add AI API keys'],
   ['save <name> | load <name> | new', 'save / load / restart'],
   ['mouse on|off, bell on|off, sync on|off', 'terminal options'],
   ['quit', 'exit'],
@@ -49,6 +50,7 @@ const LOCAL_HELP: [string, string][] = [
 
 export interface TuiOptions {
   openGui?: () => void;
+  openWeb?: (preset?: string) => void;
   onQuit?: () => void;
 }
 
@@ -298,7 +300,7 @@ export class TuiApp {
     const m = before.match(/(\S*)$/);
     const word = (m?.[1] ?? '').toLowerCase();
     const isFirst = !before.trim().includes(' ');
-    const verbs = ['launch', 'scramble', 'strike', 'recall', 'move', 'defcon', 'hotline', 'speed', 'pause', 'resume', 'zoom', 'goto', 'world', 'polar', 'flat', 'layer', 'select', 'track', 'list', 'ask', 'focus', 'gui', 'link', 'save', 'load', 'new', 'help', 'quit', 'info', 'mouse', 'bell', 'sync', 'clear'];
+    const verbs = ['launch', 'scramble', 'strike', 'recall', 'move', 'defcon', 'hotline', 'speed', 'pause', 'resume', 'zoom', 'goto', 'world', 'polar', 'flat', 'layer', 'select', 'track', 'list', 'ask', 'focus', 'gui', 'web', 'keys', 'link', 'save', 'load', 'new', 'help', 'quit', 'info', 'mouse', 'bell', 'sync', 'clear'];
     let cands: string[];
     if (isFirst) cands = verbs;
     else if (/^layer\s/i.test(before)) cands = [...LAYER_NAMES];
@@ -441,6 +443,16 @@ export class TuiApp {
       case 'gui':
         if (this.opts.openGui) { this.opts.openGui(); return this.sys('OPENING WALL DISPLAY…', COL.dim); }
         return this.sys(`OPEN THE WALL DISPLAY WITH: npm run gui -- ${this.client.link}`, COL.text);
+      case 'web':
+      case 'browser':
+        if (this.opts.openWeb) { this.opts.openWeb(arg || undefined); return this.sys(`OPENING BROWSER TAB${arg ? ` (${arg.toUpperCase()})` : ''}…`, COL.dim); }
+        return this.sys('BROWSER MODE NOT AVAILABLE IN THIS SESSION', COL.red);
+      case 'keys':
+      case 'setup':
+        this.sys('AI API KEYS — quit (or open another terminal) and run:  npm run setup', COL.text);
+        this.sys('It asks for GEMINI and/or ANTHROPIC keys (hidden input) and saves them to ~/.coldlaunch/config.json.', COL.dim);
+        this.sys('Then restart with e.g.  npm start -- --opponent gemini   or   npm start -- --opponent claude', COL.dim);
+        return;
       case 'link':
         return this.sys(`SESSION LINK: ${this.client.link}`, COL.green);
       case 'save':

@@ -6,6 +6,17 @@ opponent can be the built-in doctrine AI, **Gemini** or **Claude**, and AI codin
 
 The look is inspired by early-80s NORAD-style vector displays. The game, its name, its text and its endings are original.
 
+![War-room wall display during a missile exchange](docs/screenshots/wall.jpg)
+<p align="center"><em>The war-room wall preset: theater maps, base close-ups, comms log, ballistic missile warning board and indicator strip.</em></p>
+
+| Terminal console | European theater |
+|---|---|
+| ![Terminal console with braille vector map](docs/screenshots/terminal.jpg) | ![European theater preset with missile arcs](docs/screenshots/europe.jpg) |
+| **Ballistic missile warning** | **North polar corridors** |
+| ![Missile status board](docs/screenshots/missiles.jpg) | ![North polar view](docs/screenshots/polar.jpg) |
+| **Force status & damage assessment** | |
+| ![Stats board](docs/screenshots/stats.jpg) | |
+
 ```
  terminal console (braille vector map, orders) ─┐
  Electron / browser wall display(s) ────────────┼── ws://127.0.0.1:7700 ── game engine (authoritative, fog of war)
@@ -14,20 +25,55 @@ The look is inspired by early-80s NORAD-style vector displays. The game, its nam
 
 ## Quick start
 
+Requires Node.js 22 or newer.
+
 ```bash
+git clone https://github.com/nanobiolog/wargames.git && cd wargames
 npm install
 npm run gui:build      # build the wall display once
-npm start              # engine + terminal console + Electron wall display
+npm run setup          # optional: add Gemini / Claude API keys (see below)
+npm start              # engine + terminal console + wall display
 ```
+
+Without any API key you play against the built-in doctrine AI.
+
+### Add an AI opponent (API keys)
+
+Run **`npm run setup`**. It asks for your keys with hidden input and saves them to `~/.coldlaunch/config.json`
+(readable only by you). It also lets you pick your default opponent, its temperament and the display mode.
+
+| provider | where to get a key | |
+|---|---|---|
+| Gemini | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | paste it into `npm run setup`, or `export GEMINI_API_KEY=...` |
+| Claude | Claude Console → API keys | paste it into `npm run setup`, or `export ANTHROPIC_API_KEY=...`, or just run `ant auth login` |
+
+```bash
+npm run setup -- --show          # see what's configured (keys masked)
+npm run setup -- --clear-keys    # remove saved keys
+npm run ai:smoke -- --provider gemini   # check a key works (one small, billed call)
+```
+
+Environment variables take priority over the config file. Keys are only sent to their own provider. Inside the
+game, type `keys` for a reminder.
+
+### Display: Electron window or browser tab
+
+```bash
+npm start                         # Electron window (default)
+npm run web                       # same game, wall display in a normal browser tab
+npm start -- --display none       # terminal only; open the display later
+```
+
+Save your preferred mode with `npm run setup`. In the terminal, `gui` reopens the display, and `web` opens a browser
+tab at any time (`web conus`, `web missiles`, `web stats` …). If Electron isn't available, the game falls back to a browser tab.
 
 Common variations:
 
 ```bash
-npm start -- --opponent gemini:gemini-4-hydrogen    # Gemini opponent (needs GEMINI_API_KEY)
-npm start -- --opponent claude:claude-opus-5-5      # Claude opponent (ANTHROPIC_API_KEY or `ant auth login`)
+npm start -- --opponent gemini:gemini-4-hydrogen    # Gemini opponent
+npm start -- --opponent claude:claude-opus-5-5      # Claude opponent
 npm start -- --side USSR --personality 0.9          # play the Soviet side against a hawkish US AI
-npm start -- --web                                  # wall display in your browser instead of Electron
-npm start -- --all-monitors                         # one fullscreen window per monitor
+npm start -- --all-monitors                         # Electron: one fullscreen window per monitor
 npm start -- --ai-vs-ai --opponent gemini           # watch two AIs (spectator)
 npm run sim -- --seed 3                             # headless rules-vs-rules match
 ```
@@ -42,9 +88,7 @@ npm run sim -- --seed 3                             # headless rules-vs-rules ma
 | `openai:model@baseURL` | any OpenAI-compatible endpoint (Ollama, LM Studio, OpenRouter …) |
 
 `--advisor <spec>` picks the model that turns your **natural-language orders** into commands. It defaults to the
-opponent's provider, or to whichever API key is set. Keys can also live in `~/.coldlaunch/config.json`:
-`{"geminiApiKey": "...", "anthropicApiKey": "...", "opponent": "gemini", "personality": 0.5}`.
-Run `npm run ai:smoke -- --provider gemini:gemini-4-hydrogen` to test a key.
+opponent's provider, or to whichever API key is set.
 
 ## Playing from the terminal
 
@@ -54,7 +98,7 @@ launch icbm-minot at kozelsk x 3  strike bmr-loring-1 at moscow
 move cvbg-midway to sea of japan  recall bmr-loring-1
 hotline we are standing down      speed 30 · pause · resume
 zoom grand forks · goto barents sea · polar · world · layer roads off · select icbm-warren · track ssbn-ohio
-list silo · list enemy · focus · gui · link · save game1 · load game1 · new · help
+list silo · list enemy · focus · gui · web conus · keys · link · save game1 · load game1 · new · help
 ```
 
 Anything that isn't a command goes to your AI advisor ("send the Midway group into the Sea of Japan and put the
