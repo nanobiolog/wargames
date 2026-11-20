@@ -14,8 +14,8 @@ The look is inspired by early-80s NORAD-style vector displays. The game, its nam
 | ![Terminal console with braille vector map](docs/screenshots/terminal.jpg) | ![European theater preset with missile arcs](docs/screenshots/europe.jpg) |
 | **Ballistic missile warning** | **North polar corridors** |
 | ![Missile status board](docs/screenshots/missiles.jpg) | ![North polar view](docs/screenshots/polar.jpg) |
-| **Force status & damage assessment** | |
-| ![Stats board](docs/screenshots/stats.jpg) | |
+| **Force status & damage assessment** | **Phone: map + touch console** |
+| ![Stats board](docs/screenshots/stats.jpg) | <img src="docs/screenshots/phone.jpg" alt="Phone layout" width="260"> |
 
 ```
  terminal console (braille vector map, orders) ─┐
@@ -178,7 +178,7 @@ This table is generated from the game's own command list (`npm run docs`).
 | `flat` | back to the flat projection | `flat` | terminal |
 | `layer [name] [on\|off]`<br>alias: `layers` | list or toggle map layers. Without a name, lists all layers. The display also has service-branch layers: navy, air, rocket and ground. | `layer`<br>`layer roads off`<br>`layer navy off` | both |
 | `view &lt;preset&gt;`<br>alias: `preset` | change what this display tab shows. Presets: wall, world, conus, europe, eurasia, alaska, pacific, atlantic, polar, missiles, stats, log. | `view missiles`<br>`view conus` | display |
-| `select &lt;unit&gt;` | select a unit and show its details. Clicking a unit on any map does the same. The selection is shared between the terminal and every display. | `select icbm-warren` | both |
+| `select &lt;unit\|missile&gt;` | select a unit or missile track and show its details. Shows type, status, speed, distance remaining, ETA (game clock and real time), fuel and payload; for missiles: phase, altitude, speed, distance to impact and time to impact. Clicking a unit or a missile head on any map does the same. | `select cvbg-americas`<br>`select m12` | both |
 | `track &lt;unit&gt;` | select a unit and keep the map centered on it. Esc stops tracking. | `track ssbn-ohio` | terminal |
 | `focus` | fly the wall displays to the terminal view | `focus` | terminal |
 
@@ -187,7 +187,7 @@ This table is generated from the game's own command list (`npm run docs`).
 | command | what it does | example | where |
 |---|---|---|---|
 | `list [kind\|enemy]` | list your units or known enemy contacts. Kinds: silo, ssbn, ssn, carrier, airbase, bomber, afb_int, radar, abm, command, navalbase. | `list silo`<br>`list enemy` | both |
-| `info [unit]` | details of the selected (or named) unit | `info` | terminal |
+| `info [unit\|missile]` | details of the selected (or named) unit or missile | `info`<br>`info bmr-loring-1` | both |
 | `help [command]`<br>alias: `?` | list commands, or explain one in detail | `help`<br>`help launch` | both |
 | `keys`<br>alias: `setup` | how to add Gemini / Claude API keys | `keys` | terminal |
 
@@ -198,7 +198,8 @@ This table is generated from the game's own command list (`npm run docs`).
 | `speed &lt;x&gt;` | set time compression. Game seconds per real second (0.5-120). Keys [ and ] step through 1, 2, 5, 10, 20, 30, 60. | `speed 30` | both |
 | `pause` | pause the clock (space bar toggles). Everyone in the session sees the pause. | `pause` | both |
 | `resume` | resume the clock | `resume` | both |
-| `link` | show the links other screens and PCs can join with | `link` | both |
+| `share`<br>alias: `qr` | share this game with phones and other PCs (QR codes). Opens the game to your local network (no restart needed) and shows QR codes. Scan one with a phone to get the map plus a touch console, or open the links on another PC. Only the machine running the game can switch sharing on. Anyone with the link can join, so use it on trusted networks. | `share` | both |
+| `link` | list the join links as text (no QR) | `link` | both |
 | `gui` | open the wall display (your saved display mode) | `gui` | terminal |
 | `web [preset]`<br>alias: `browser` | open a display in a new browser tab/window | `web conus`<br>`web missiles` | both |
 | `save &lt;name&gt;` | save the game. Saved to ~/.coldlaunch/saves on the machine running the game. | `save crisis1` | both |
@@ -241,6 +242,35 @@ contacts, missiles, predicted impacts, tracks, detonations, radar, air-defence r
 has **service-branch filters** for Navy, Air Force, Strategic Rocket Forces, and Ground C2 & radars. **CRT** (`C`)
 tunes bloom, phosphor persistence, scanlines and exposure.
 
+### Unit and missile details
+
+Click any unit, task group or missile head on a map (or type `select <id>` / `info <id>`, e.g. `select m12`). The info
+card shows live:
+
+- **ships, subs and bomber groups:** status, speed (knots or km/h), heading, distance remaining along the planned route,
+  and ETA on the game clock and in real time at the current time compression. Bombers add fuel, range left, holding
+  endurance at the fail-safe point and their target.
+- **missiles:** type and side, target, flight phase (boost, midcourse, terminal), altitude and apex, speed in km/s and
+  Mach, distance to impact, time to impact, warheads × yield, and whether radar has confirmed the track.
+- **bases and silos:** missiles and warheads left, aircraft, interceptors, radar range.
+- **enemy contacts:** only what your intelligence has: identified or not, and when last seen.
+
+### Map symbols
+
+| symbol | unit | | symbol | unit |
+|---|---|---|---|---|
+| triangle with a missile | ICBM field | | runway with bomber | bomber base |
+| delta-wing jet | interceptor base | | swept-wing bomber (turns to heading) | airborne bomber group |
+| long hull, sail, missile deck | ballistic-missile submarine (SSBN) | | short hull with sail | attack submarine (SSN) |
+| angled flight deck with escorts | carrier / surface task group | | anchor | naval base |
+| dish on a mast | early-warning radar | | shield over a missile | ABM site |
+| star in a ring | command post | | diamond with ? | unidentified contact |
+
+Blue symbols are US forces, red are Soviet, yellow are unidentified, and magenta marks the selection. Ships and subs
+face their direction of travel. The 1983 order of battle has no ground armies: the ground layer covers missile
+fields, command bunkers and radars. Map labels use a vector font that draws accented letters (Ğ, Ş, İ, Ö, Ü, Ç, Å,
+Ł, Vietnamese tone marks …) and transliterates Cyrillic and Greek.
+
 ## Multiple screens and multiple PCs
 
 Every screen is just a client of the one game server. Screens can be windows on the same PC, browser tabs, or other computers.
@@ -256,29 +286,43 @@ Every screen is just a client of the one game server. Screens can be windows on 
    monitor, and choose its view, e.g. CONUS on one, *Ballistic missile status* on the next, then *Stats*, *World* and *Europe*.
    You can also open the links directly: `…&preset=conus`, `…&preset=missiles`, `…&preset=stats`, `…&preset=world`.
 
-**Other PCs, tablets and TVs on your network**
+**Phones, tablets and other PCs: scan a QR code**
 
-1. On the PC that runs the game: `npm start -- --host 0.0.0.0` (add `--opponent human` for two players).
-2. Type `link` in the terminal or the display console. It prints ready-made links that use your LAN address:
+1. While the game is running, type **`share`** in the terminal, or click **SHARE** (**QR** on a phone) in any display.
+   This opens the game to your local network with no restart needed, and shows QR codes:
 
-   ```
-   spectator wall (any PC)    http://192.168.1.104:7700/?token=…&role=SPECTATOR&preset=wall
-   missile board (any PC)     http://192.168.1.104:7700/?token=…&role=USA&preset=missiles
-   USSR player browser        http://192.168.1.104:7700/?token=…&role=USSR&preset=wall
-   USSR player terminal       npm start -- --join "coldlaunch://192.168.1.104:7700/s/…?role=USSR"
-   ```
-3. Open a link in any browser on the other device. Add `&preset=…` for a different view and `&console=1` to
-   open the built-in console. A second player who prefers a terminal clones the repo and runs the `--join` command.
+   | QR code | opens |
+   |---|---|
+   | Phone: map + console | your side on a phone: polar map on top, touch console below |
+   | Full war-room wall | your side's wall on a tablet, laptop or second PC |
+   | Spectator wall | everything, for a TV or big screen (can only pause and change speed) |
+   | Second player (phone) | the **other** side, for a friend (use with `--opponent human`) |
+
+   In the terminal the QR code is drawn black-on-white so phone cameras can read it on a dark screen. Use ← → to
+   switch codes and Esc to close. The display's share panel also lists every link with a COPY button, including the
+   `npm start -- --join …` commands for someone who wants to play from their own terminal.
+2. Scan with the phone camera on the same Wi-Fi. To share from the very start, use `npm start -- --lan`.
+
+Only the computer running the game can switch sharing on. When it does, the server opens a second listener for
+the LAN on the next port (e.g. 7701) and keeps the original one private. The token in the link is the only key to
+the session, so share on networks you trust. Your OS may ask once whether Node may accept incoming connections.
+
+**The phone layout** (the `phone` view, chosen automatically on small touch screens)
+
+- A header shows your side, DEFCON, the war clock, tension and a blinking inbound counter, plus **MAP / BOTH / CONSOLE**
+  tabs, a **QR** button and a **☰** menu.
+- The map: drag to pan, pinch to zoom, tap a unit or missile for its details, long-press for the order menu.
+- The console works like the terminal, with suggestion chips you can tap. Landscape puts the map and console side by side.
 
 **Roles:** `role=USA` and `role=USSR` see only their own side's intelligence (fog of war) and can give orders.
 `role=SPECTATOR` sees everything and can only pause or change speed, which suits a big TV wall. You can open as many
 screens per role as you like, and they all stay in sync.
 
-**Two human players:** `npm start -- --opponent human --host 0.0.0.0` turns off the AI. Send the *USSR player*
-link to your friend: they play in a browser with the built-in console, or in their own terminal with `--join`.
+**Two human players:** start with `npm start -- --opponent human --lan` to turn off the AI. Your friend scans the
+*Second player* QR code, or runs the `--join` command from the share list in their own terminal.
 
-**Security:** the game listens only on your own machine unless you pass `--host 0.0.0.0`. The token in the link is
-the only key to the session, so share links only on networks you trust. Opening the port may trigger your OS firewall prompt.
+**Narrow terminals** (a phone SSH app, a split pane): the terminal console switches to a vertical layout, with the
+map on top (north-polar view when the window is tall), a compact status board, the event log and the prompt.
 
 ## Command your side from Claude Code / Gemini CLI (MCP)
 

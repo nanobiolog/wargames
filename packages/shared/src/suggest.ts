@@ -54,7 +54,7 @@ function candidatesFor(kind: ArgKind | undefined, ctx: SuggestCtx): string[] {
     case 'ownunit':
       return own(ctx).map((u) => u.id);
     case 'unit':
-      return [...own(ctx).map((u) => u.id), ...enemy(ctx).map((c) => c.id)];
+      return [...own(ctx).map((u) => u.id), ...enemy(ctx).map((c) => c.id), ...(ctx.snap?.missiles ?? []).filter((m) => m.type !== 'ABM').map((m) => m.id)];
     case 'target':
       return [
         ...enemy(ctx).filter((c) => c.identified).sort((a, b) => (TARGET_ORDER[a.kind] ?? 20) - (TARGET_ORDER[b.kind] ?? 20)).map((c) => c.id),

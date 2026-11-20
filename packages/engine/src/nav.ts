@@ -1,27 +1,61 @@
-// Ocean routing for ships and submarines: A* on a 0.5° water grid derived from the land mask.
+// Ocean routing for ships and submarines: A* on a 0.25° water grid derived from the land mask.
+// Only water connected to the open ocean is navigable (no inland lakes), plus hand-opened straits.
 import type { LandMask } from '@coldlaunch/data';
 import type { LatLon } from '@coldlaunch/shared';
 import { distKm } from '@coldlaunch/shared';
 
-const RES = 0.5;
-const W = 720;
-const H = 360;
+const RES = 0.25;
+const W = 1440;
+const H = 720;
+
+/** Straits / canals narrower than a grid cell, forced open (lat, lon polylines). */
+const STRAITS: [number, number][][] = [
+  [[36.0, -6.3], [35.95, -5.6], [36.0, -5.0], [36.15, -4.4]], // Gibraltar
+  [[39.9, 25.9], [40.2, 26.4], [40.45, 26.75], [40.7, 27.6], [40.95, 28.8], [41.1, 29.05], [41.3, 29.15]], // Dardanelles–Marmara–Bosporus
+  [[57.7, 10.7], [57.0, 11.2], [56.2, 12.2], [55.7, 12.7], [55.3, 12.9], [54.9, 13.4]], // Kattegat–Øresund
+  [[56.0, 10.9], [55.4, 10.95], [54.8, 11.0], [54.4, 11.2]], // Great Belt
+  [[45.0, 36.35], [45.3, 36.55], [45.5, 36.7]], // Kerch
+  [[12.3, 43.5], [12.6, 43.3], [12.9, 43.15]], // Bab-el-Mandeb
+  [[29.85, 32.55], [30.6, 32.35], [31.3, 32.3]], // Suez Canal
+  [[8.85, -79.5], [9.1, -79.7], [9.4, -79.9]], // Panama Canal
+  [[1.15, 103.6], [1.2, 103.9], [1.3, 104.3]], // Singapore Strait
+  [[38.2, 15.6], [38.0, 15.65]], // Messina
+];
 
 export class OceanNav {
   private water: Uint8Array;
   constructor(private mask: LandMask) {
-    this.water = new Uint8Array(W * H);
-    // A 0.5° cell is navigable if any of its 4 quarter-degree sub-cells is water,
-    // which keeps narrow straits (Gibraltar, Bosporus, Øresund) open.
+    const raw = new Uint8Array(W * H);
     for (let r = 0; r < H; r++) {
       for (let c = 0; c < W; c++) {
-        const lat = 90 - (r + 0.5) * RES;
-        const lon = -180 + (c + 0.5) * RES;
-        let wet = false;
-        for (const [dy, dx] of [[-0.125, -0.125], [-0.125, 0.125], [0.125, -0.125], [0.125, 0.125]]) {
-          if (!mask.isLand(lat + dy, lon + dx)) { wet = true; break; }
+        raw[r * W + c] = mask.isLand(90 - (r + 0.5) * RES, -180 + (c + 0.5) * RES) ? 0 : 1;
+      }
+    }
+    for (const line of STRAITS) {
+      for (let i = 1; i < line.length; i++) {
+        const [la1, lo1] = line[i - 1], [la2, lo2] = line[i];
+        const n = Math.ceil(Math.max(Math.abs(la2 - la1), Math.abs(lo2 - lo1)) / (RES / 3)) + 1;
+        for (let k = 0; k <= n; k++) {
+          const [r, c] = this.cell({ lat: la1 + ((la2 - la1) * k) / n, lon: lo1 + ((lo2 - lo1) * k) / n });
+          raw[r * W + c] = 1;
         }
-        this.water[r * W + c] = wet ? 1 : 0;
+      }
+    }
+    // keep only water connected to the open ocean (drops Caspian, Ladoga, Great Lakes, …)
+    this.water = new Uint8Array(W * H);
+    const [sr, sc] = this.cell({ lat: 0, lon: -30 });
+    const stack = [sr * W + sc];
+    this.water[stack[0]] = 1;
+    while (stack.length) {
+      const i = stack.pop()!;
+      const r = Math.floor(i / W), c = i % W;
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          const nr = r + dr;
+          if (nr < 0 || nr >= H) continue;
+          const ni = nr * W + ((c + dc + W) % W);
+          if (raw[ni] && !this.water[ni]) { this.water[ni] = 1; stack.push(ni); }
+        }
       }
     }
   }
@@ -48,7 +82,7 @@ export class OceanNav {
   /** Nearest water cell centre to p (searching outward), or null. */
   private nearestWet(p: LatLon): [number, number] | null {
     const [r0, c0] = this.cell(p);
-    for (let rad = 0; rad < 8; rad++) {
+    for (let rad = 0; rad < 16; rad++) {
       for (let dr = -rad; dr <= rad; dr++) {
         for (let dc = -rad; dc <= rad; dc++) {
           if (Math.max(Math.abs(dr), Math.abs(dc)) !== rad) continue;
@@ -81,7 +115,7 @@ export class OceanNav {
     heap.push(start, h(start));
     let found = false;
     let iter = 0;
-    while (heap.size && iter++ < 400000) {
+    while (heap.size && iter++ < 2000000) {
       const cur = heap.pop();
       if (cur === goal) { found = true; break; }
       if (closed[cur]) continue;

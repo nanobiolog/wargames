@@ -6,3 +6,4 @@ export * from './parse.ts';
 export * from './client.ts';
 export * from './commands.ts';
 export * from './suggest.ts';
+export * from './details.ts';

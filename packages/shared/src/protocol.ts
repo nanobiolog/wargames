@@ -47,9 +47,17 @@ export const ClientMsgSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('save'), name: z.string().regex(/^[\w-]{1,40}$/) }),
   z.object({ t: z.literal('load'), name: z.string().regex(/^[\w-]{1,40}$/) }),
   z.object({ t: z.literal('newgame'), seed: z.number().int().optional() }),
+  z.object({ t: z.literal('share'), enable: z.boolean().optional() }),
   z.object({ t: z.literal('ping') }),
 ]);
 export type ClientMsg = z.infer<typeof ClientMsgSchema>;
+
+export interface ShareInfo {
+  lan: boolean; // reachable from other devices
+  host: string;
+  port: number;
+  links: { label: string; url: string; kind: 'web' | 'terminal' }[];
+}
 
 export interface PlanProposal {
   id: string;
@@ -65,6 +73,7 @@ export type ServerMsg =
   | { t: 'focus'; focus: Focus; from: string }
   | { t: 'plan'; plan: PlanProposal; askId?: string } // advisor proposal waiting for confirmation
   | { t: 'planPreview'; plan: PlanProposal | null }
+  | { t: 'share'; info: ShareInfo }
   | { t: 'error'; msg: string }
   | { t: 'pong' };
 

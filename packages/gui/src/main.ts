@@ -2,7 +2,8 @@ import { GameClient, makeLink, parseLink, type Focus, type GameEvent, type LatLo
 import { Renderer, DynBatch, type FxSettings } from './gl.ts';
 import { GeoStore, bucketize } from './geo.ts';
 import { buildWorld, LAYER_LIST, type LayerKey, type SceneState } from './scene.ts';
-import { drawPanel, layoutFor, panelAt, zoomPanel, panPanel, flyTo, nearestPick, PRESET_NAMES, type Panel, type WallCtx } from './wall.ts';
+import { drawPanel, layoutFor, phoneLayout, panelAt, zoomPanel, panPanel, flyTo, nearestPick, PRESET_NAMES, type Panel, type WallCtx, type PhoneMode } from './wall.ts';
+import { PhoneHud } from './phone.ts';
 import { Ui } from './ui.ts';
 import { Console } from './console.ts';
 
@@ -28,10 +29,13 @@ const st: SceneState = {
   trails: new Map(), places: [],
 };
 const fx: FxSettings = { bloom: 0.55, persistence: 0.8, scanlines: 0.3, exposure: 1.05, ...store.get('fx2', {}) };
-let preset = params.get('preset') ?? store.get('preset', 'wall');
+const smallTouch = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 700;
+let preset = params.get('preset') ?? (smallTouch ? 'phone' : store.get('preset', 'wall'));
+let phoneMode: PhoneMode = store.get('phoneMode', 'split');
 if (!PRESET_NAMES.includes(preset)) preset = 'wall';
 let panels: Panel[] = [];
 let maximized: string | null = null;
+let hud: PhoneHud | null = null;
 let snapAt = 0;
 const events: GameEvent[] = [];
 const grids = makeGrids();
@@ -56,7 +60,14 @@ function relayout() {
   const W = Math.floor(window.innerWidth * dpr), H = Math.floor(window.innerHeight * dpr);
   r.resize(W, H);
   const keep = new Map(panels.map((p) => [p.id, p]));
-  panels = layoutFor(preset, W / H).map((p) => {
+  const isPhone = preset === 'phone';
+  document.body.classList.toggle('phone', isPhone);
+  for (const m of ['split', 'map', 'console']) document.body.classList.toggle(`phone-${m}`, isPhone && phoneMode === m);
+  document.body.classList.toggle('landscape', W > H * 1.1);
+  const hudPx = isPhone ? (hud ? hud.height() : 48) : 0;
+  document.body.style.setProperty('--hud-h', `${hudPx}px`);
+  const headerFrac = (hudPx * dpr) / H;
+  panels = (isPhone ? phoneLayout(W / H, phoneMode, headerFrac) : layoutFor(preset, W / H)).map((p) => {
     const old = keep.get(p.id);
     return old ? { ...p, view: old.view, title: old.focus ? old.title : p.title } : p;
   });
@@ -66,8 +77,16 @@ function relayout() {
   }
 }
 
+function setPhoneMode(m: PhoneMode) {
+  phoneMode = m;
+  store.set('phoneMode', m);
+  relayout();
+  if (m !== 'map') konsole.toggle(true);
+}
+
 function setPreset(name: string) {
   preset = name;
+  if (name === 'phone') setTimeout(() => konsole.toggle(true), 0);
   maximized = null;
   panels = [];
   store.set('preset', name);
@@ -108,6 +127,8 @@ client.on('welcome', () => {
 });
 client.on('snap', (s: Snapshot) => {
   snapAt = performance.now();
+  hud?.update(s);
+  konsole.onSnapshot();
   // client-side movement history for tracks
   for (const u of [...s.units, ...s.contacts]) {
     if (u.kind !== 'bomber' && u.kind !== 'carrier' && u.kind !== 'ssbn' && u.kind !== 'ssn') continue;
@@ -282,8 +303,75 @@ const konsole = new Console(document.getElementById('ui')!, {
   saveLayers: () => store.set('layers', st.layers),
   webLinks,
   onSelect: () => ui.updateInfo(),
+  share: () => void ui.openShare(true),
 });
-if (params.get('console') === '1') konsole.toggle(true);
+if (params.get('console') === '1' || preset === 'phone') konsole.toggle(true);
+hud = new PhoneHud(document.getElementById('ui')!, {
+  client, getMode: () => phoneMode, setMode: setPhoneMode,
+  menu: () => { document.querySelector('.toolbar')?.classList.toggle('open'); },
+  share: () => void ui.openShare(),
+});
+relayout();
+
+// ------------------------------------------------------------------ touch: pan, pinch, tap, long-press
+let touch: { p: Panel; x: number; y: number; d: number; moved: boolean; t0: number; timer?: number } | null = null;
+const tpos = (t: Touch): [number, number] => [t.clientX * st.dpr, t.clientY * st.dpr];
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  const [x, y] = tpos(e.touches[0]);
+  const p = panelAt(panels, x, y);
+  if (!p || p.kind !== 'map') return;
+  const d = e.touches.length > 1 ? Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY) : 0;
+  if (touch?.timer) clearTimeout(touch.timer);
+  touch = { p, x, y, d, moved: e.touches.length > 1, t0: performance.now() };
+  if (e.touches.length === 1) {
+    const t0 = e.touches[0];
+    touch.timer = window.setTimeout(() => {
+      if (!touch || touch.moved) return;
+      const hit = nearestPick(p, x - p.px!.x, y - p.px!.y, 24 * st.dpr);
+      ui.contextMenu(t0.clientX, t0.clientY, hit?.id ?? null, fromXf(p, x - p.px!.x, y - p.px!.y));
+      touch = null;
+    }, 550);
+  }
+}, { passive: false });
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  if (!touch) return;
+  const p = touch.p;
+  if (e.touches.length > 1) {
+    const a = e.touches[0], b = e.touches[1];
+    const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    const mx = ((a.clientX + b.clientX) / 2) * st.dpr - p.px!.x, my = ((a.clientY + b.clientY) / 2) * st.dpr - p.px!.y;
+    if (touch.d > 0) zoomPanel(p, d / touch.d, mx, my);
+    touch.d = d;
+    touch.moved = true;
+    return;
+  }
+  const [x, y] = tpos(e.touches[0]);
+  if (Math.abs(x - touch.x) + Math.abs(y - touch.y) > 6 * st.dpr) touch.moved = true;
+  if (touch.moved) panPanel(p, x - touch.x, y - touch.y);
+  touch.x = x;
+  touch.y = y;
+}, { passive: false });
+canvas.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  if (!touch) return;
+  if (touch.timer) clearTimeout(touch.timer);
+  const t = touch;
+  if (e.touches.length > 0) { touch.d = 0; return; }
+  touch = null;
+  if (t.moved || performance.now() - t.t0 > 500) return;
+  const p = t.p;
+  const lx = t.x - p.px!.x, ly = t.y - p.px!.y;
+  const hit = nearestPick(p, lx, ly, 24 * st.dpr);
+  if (ui.targeting) return ui.completeTarget(hit?.id ?? null, fromXf(p, lx, ly));
+  st.selected = hit?.id ?? null;
+  if (hit) {
+    const u = [...(client.snap?.units ?? []), ...(client.snap?.contacts ?? [])].find((q) => q.id === hit.id);
+    if (u) client.focus({ lat: u.lat, lon: u.lon, unit: u.id, label: u.name });
+  }
+  ui.updateInfo();
+}, { passive: false });
 
 // ------------------------------------------------------------------ frame loop
 

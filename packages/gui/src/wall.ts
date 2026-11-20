@@ -39,7 +39,19 @@ export const MAP_PRESETS: Record<string, { title: string; view: View }> = {
   loring: { title: 'LORING AIR FORCE BASE', view: V(46.95, -67.89, 32) },
 };
 
-export const PRESET_NAMES = ['wall', 'world', 'conus', 'europe', 'eurasia', 'alaska', 'pacific', 'atlantic', 'polar', 'missiles', 'stats', 'log'];
+export const PRESET_NAMES = ['wall', 'world', 'conus', 'europe', 'eurasia', 'alaska', 'pacific', 'atlantic', 'polar', 'missiles', 'stats', 'log', 'phone'];
+
+export type PhoneMode = 'split' | 'map' | 'console';
+
+/** Phone layout: one map under a DOM header, console docked below (portrait) or to the right (landscape). */
+export function phoneLayout(aspect: number, mode: PhoneMode, headerFrac: number): Panel[] {
+  if (mode === 'console') return [];
+  const top = headerFrac + 0.004;
+  let rect;
+  if (aspect > 1.1) rect = { x: 0.004, y: top, w: mode === 'map' ? 0.992 : 0.56, h: 0.992 - top };
+  else rect = { x: 0.01, y: top, w: 0.98, h: mode === 'map' ? 0.99 - top : 0.47 - top };
+  return [mapPanel('main', aspect > 1.1 ? 'world' : 'polar', rect, true)];
+}
 
 const STRIP_H = 0.055;
 

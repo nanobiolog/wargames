@@ -1,11 +1,13 @@
 import {
-  GameClient, parseCommandLine, describeCommand, DEFCON_NAMES, KIND_LABEL, PALETTE, suggest, helpLines,
+  GameClient, parseCommandLine, describeCommand, DEFCON_NAMES, KIND_LABEL, PALETTE, suggest, helpLines, selectionDetails, ballisticPos as bpos,
   type Suggestion,
   distKm, fmtLatLon, ballisticPos, normLon, SPEED_STEPS,
   type GameEvent, type Side, type Unit, type Contact, type PlanProposal, type Snapshot, type Command, type Focus,
 } from '@coldlaunch/shared';
 import { loadPlaces } from '@coldlaunch/data';
 import { Screen, hex, dim, type RGB } from './screen.ts';
+import QRCode from 'qrcode';
+import type { ShareInfo } from '@coldlaunch/shared';
 import { MapView, LAYER_NAMES, type LayerName } from './mapview.ts';
 
 const COL = {
@@ -68,6 +70,8 @@ export class TuiApp {
   private sync = true;
   private drag: { x: number; y: number } | null = null;
   private mapRect = { x: 0, y: 1, w: 80, h: 20 };
+  private shareView: { info: ShareInfo; idx: number } | null = null;
+  private projChosen = false;
   private places = loadPlaces();
   private lastSnapT = -1;
 
@@ -87,8 +91,14 @@ export class TuiApp {
       if (s.t !== this.lastSnapT) this.dirty = true;
       this.lastSnapT = s.t;
       if (this.tracking) {
-        const u = this.findUnit(this.tracking);
+        const m = s.missiles.find((x) => x.id === this.tracking);
+        const u = m ? bpos(m.from, m.to, m.launchT, m.impactT, m.apexKm, s.t).p : this.findUnit(this.tracking);
         if (u) { this.map.lat = u.lat; this.map.lon = u.lon; }
+      }
+      if (this.selected && /^m\d+$/.test(this.selected) && !s.missiles.some((x) => x.id === this.selected)) {
+        this.sys(`${this.selected.toUpperCase()} — TRACK ENDED (IMPACT OR INTERCEPT)`, COL.dim);
+        if (this.tracking === this.selected) this.tracking = null;
+        this.selected = null;
       }
     });
     this.client.on('events', (evs: GameEvent[]) => {
@@ -216,6 +226,14 @@ export class TuiApp {
       '\x1b[F': () => (this.cursor = this.input.length),
       '\x1b': () => { this.input = ''; this.cursor = 0; this.tracking = null; },
     };
+    if (this.shareView) {
+      const webLinks = this.shareView.info.links.filter((l) => l.kind === 'web');
+      if (data === '\x1b' || data === 'q' || data === '\r') this.shareView = null;
+      else if (data === '\x1b[C' || data === '\t' || data === ' ') this.shareView.idx = (this.shareView.idx + 1) % webLinks.length;
+      else if (data === '\x1b[D') this.shareView.idx = (this.shareView.idx + webLinks.length - 1) % webLinks.length;
+      else if (/^[1-9]$/.test(data) && +data <= webLinks.length) this.shareView.idx = +data - 1;
+      return;
+    }
     if (keys[data]) return void keys[data]();
     for (const ch of data) {
       const code = ch.charCodeAt(0);
@@ -421,14 +439,17 @@ export class TuiApp {
         return;
       }
       case 'world':
+        this.projChosen = true;
         this.map.proj = 'equirect';
         this.map.centerOn(30, -20, 1);
         return this.sendFocus('WORLD');
       case 'polar':
+        this.projChosen = true;
         this.map.proj = 'polar';
         this.map.centerOn(90, 0, 1);
         return this.sys('NORTH POLAR AZIMUTHAL PROJECTION', COL.dim);
       case 'flat':
+        this.projChosen = true;
         this.map.proj = 'equirect';
         this.map.lat = Math.min(this.map.lat, 70);
         return;
@@ -446,6 +467,15 @@ export class TuiApp {
       case 'select':
       case 'track':
       case 'info': {
+        const mid = (arg || this.selected || '').toLowerCase();
+        const m = this.client.snap?.missiles.find((x) => x.id === mid);
+        if (m && this.client.snap) {
+          this.selected = m.id;
+          this.tracking = v === 'track' ? m.id : null;
+          const p = bpos(m.from, m.to, m.launchT, m.impactT, m.apexKm, this.client.snap.t).p;
+          this.map.centerOn(p.lat, p.lon, Math.max(this.map.zoom, 3));
+          return this.sys(this.describeSelection(m.id).join('\n'), COL.magenta);
+        }
         const u = arg ? this.findUnit(arg) : this.selected ? this.findUnit(this.selected) : undefined;
         if (!u) return this.sys(arg ? `UNKNOWN UNIT ${arg}` : 'NOTHING SELECTED', COL.red);
         this.selected = u.id;
@@ -481,6 +511,16 @@ export class TuiApp {
         this.sys('It asks for GEMINI and/or ANTHROPIC keys (hidden input) and saves them to ~/.coldlaunch/config.json.', COL.dim);
         this.sys('Then restart with e.g.  npm start -- --opponent gemini   or   npm start -- --opponent claude', COL.dim);
         return;
+      case 'share':
+      case 'qr': {
+        this.sys('OPENING SESSION TO THE LOCAL NETWORK…', COL.dim);
+        const r = await this.client.share(true);
+        if (!('links' in r)) return this.sys(r.msg, COL.red);
+        if (!r.lan) return this.sys('COULD NOT FIND A LAN ADDRESS — IS THIS MACHINE ON A NETWORK?', COL.red);
+        this.shareView = { info: r, idx: 0 };
+        for (const l of r.links) this.sys(`${l.label.padEnd(36)} ${l.url}`, COL.green);
+        return;
+      }
       case 'link': {
         const ls = this.opts.links?.() ?? [['session', this.client.link ?? '']];
         for (const [label, url] of ls) this.sys(`${label.padEnd(22)} ${url}`, COL.green);
@@ -560,7 +600,17 @@ export class TuiApp {
     return parts.join(' ');
   }
 
+  /** Title + "LABEL  value" lines from the shared details helper (units, contacts and missiles). */
+  private describeSelection(id: string): string[] {
+    const snap = this.client.snap;
+    const d = snap ? selectionDetails(id, snap) : null;
+    if (!d) return [];
+    return [d.title, ...d.lines.map((l) => `${l.label.padEnd(11)} ${l.value}`)];
+  }
+
   private describeUnit(u: Unit | Contact): string[] {
+    const shared = this.describeSelection(u.id);
+    if (shared.length) return shared;
     const x = u as Unit;
     const out = [`${u.name} [${u.id.toUpperCase()}]`, `${KIND_LABEL[u.kind]} · ${u.cls} · ${u.side} · ${u.status.toUpperCase()} · ${fmtLatLon(u)}`];
     if (x.missiles !== undefined) out.push(`MISSILES ${x.missiles}${x.missilesMax ? '/' + x.missilesMax : ''} × ${x.warheads ?? 1} RV × ${x.yieldKt} KT · RANGE ${x.rangeKm} KM`);
@@ -591,10 +641,20 @@ export class TuiApp {
     const W = scr.w, H = scr.h;
     const snap = this.client.snap;
     const wide = W >= 110;
+    // narrow / tall terminals (phones over SSH, split panes): vertical stack with a compact status board
+    const portrait = !wide && H * 2.1 > W;
+    if (portrait && !this.projChosen && this.map.proj !== 'polar') { this.map.proj = 'polar'; this.map.centerOn(90, 0, 1); }
+    const boardH = !wide && H >= 22 ? 5 : 0;
     const sideW = wide ? Math.min(38, Math.floor(W * 0.26)) : 0;
-    const logH = H >= 40 ? 10 : H >= 28 ? 7 : 4;
     const mapW = W - sideW;
-    const mapH = H - 1 - logH - 2;
+    let mapH: number, logH: number;
+    if (portrait) {
+      mapH = Math.max(8, Math.floor((H - 3 - boardH) * 0.5));
+      logH = H - 1 - mapH - boardH - 2;
+    } else {
+      logH = H >= 40 ? 10 : H >= 28 ? 7 : 4;
+      mapH = H - 1 - logH - 2 - boardH;
+    }
     this.mapRect = { x: 0, y: 1, w: mapW, h: mapH };
 
     this.renderStatus(snap);
@@ -602,8 +662,10 @@ export class TuiApp {
     this.map.render(scr, 0, 1, { snap, world: this.client.world, side: this.side(), selected: this.selected });
     this.renderMapOverlay(snap);
     if (wide) this.renderSidebar(mapW, 1, sideW, mapH, snap);
-    this.renderLog(0, 1 + mapH, W, logH);
+    if (boardH) this.renderCompactBoard(1 + mapH, W, snap);
+    this.renderLog(0, 1 + mapH + boardH, W, logH);
     this.renderInput(H - 1, W);
+    if (this.shareView) this.renderShare();
     scr.flush();
   }
 
@@ -639,6 +701,31 @@ export class TuiApp {
       const msg = ` SIMULATION COMPLETE — ${snap.over.reason} `;
       this.scr.put(r.x + Math.max(0, Math.floor((r.w - msg.length) / 2)), r.y + Math.floor(r.h / 2), msg, [0, 0, 0], COL.white, true);
     }
+  }
+
+  /** 5-row status board for narrow terminals (replaces the sidebar). */
+  private renderCompactBoard(y: number, w: number, snap?: Snapshot) {
+    const scr = this.scr;
+    scr.put(0, y, '─'.repeat(w), COL.frame);
+    scr.put(2, y, ' STATUS ', COL.title, [0, 0, 0], true);
+    if (!snap) return;
+    const role = this.side();
+    const rows: [string, RGB][] = [];
+    const sides: Side[] = role === 'USSR' ? ['USSR', 'USA'] : ['USA', 'USSR'];
+    rows.push([sides.map((sd) => `${sd} DEFCON ${snap.defcon[sd]}${role !== 'SPECTATOR' && sd !== role ? '(EST)' : ` ${DEFCON_NAMES[snap.defcon[sd]]}`}`).join('  │  '), DEFCON_COLOR[role === 'SPECTATOR' ? 5 : snap.defcon[role as Side]]]);
+    rows.push([`INBOUND ${snap.threat.inbound}  DETONATIONS ${snap.threat.impacts}  BMR ${snap.threat.bombers}  SUB ${snap.threat.subs}  TENSION ${snap.tension}`, snap.threat.inbound ? COL.red : COL.text]);
+    if (role !== 'SPECTATOR') {
+      const own = snap.units.filter((u) => u.status !== 'destroyed');
+      const sum = (k: Unit['kind'], f: (u: Unit) => number) => own.filter((u) => u.kind === k).reduce((a, u) => a + f(u), 0);
+      rows.push([`ICBM ${sum('silo', (u) => u.missiles ?? 0)}  SLBM ${sum('ssbn', (u) => u.missiles ?? 0)}  BOMBERS ${sum('airbase', (u) => u.aircraft ?? 0)} GND/${sum('bomber', (u) => u.aircraft ?? 0)} AIR  CAS ${fmtK(snap.score[role as Side].killed)}`, COL.text]);
+    }
+    const selD = this.selected ? selectionDetails(this.selected, snap) : null;
+    if (selD) rows.push([`▸ ${selD.title} · ${selD.lines.filter((l) => /ETA|IMPACT|REMAINING|TO TARGET|STATUS/.test(l.label)).map((l) => `${l.label} ${l.value}`).slice(0, 2).join(' · ')}`, COL.magenta]);
+    else {
+      const ai = Object.entries(snap.ai)[0];
+      rows.push([ai?.[1] ? `AI ${ai[0]} ${ai[1].provider}:${ai[1].model} ${ai[1].thinking ? 'THINKING' : ''}` : 'tap/click a unit for details · help for orders', COL.purple]);
+    }
+    rows.slice(0, 4).forEach(([t, c], i) => scr.put(1, y + 1 + i, t.slice(0, w - 2), c, [0, 0, 0], i === 0));
   }
 
   private renderSidebar(x: number, y: number, w: number, h: number, snap?: Snapshot) {
@@ -691,11 +778,11 @@ export class TuiApp {
         if (a.lastError) line(a.lastError.slice(0, w - 4), COL.red);
       }
     }
-    const sel = this.selected ? this.findUnit(this.selected) : undefined;
-    if (sel) {
+    const selLines = this.selected ? this.describeSelection(this.selected) : [];
+    if (selLines.length) {
       row++;
       line('── SELECTED ──', COL.magenta);
-      for (const l of this.describeUnit(sel)) {
+      for (const l of selLines) {
         for (let i = 0; i < l.length; i += w - 4) line(l.slice(i, i + w - 4), COL.magenta);
       }
     }
@@ -730,6 +817,42 @@ export class TuiApp {
     for (let i = start; i < end; i++) {
       scr.put(x + 1, row++, lines[i].text, lines[i].color, [0, 0, 0], lines[i].bold);
     }
+  }
+
+  /** Centered overlay with a black-on-white QR code (scannable on dark terminals) + the link. */
+  private renderShare() {
+    const scr = this.scr;
+    const sv = this.shareView!;
+    const webLinks = sv.info.links.filter((l) => l.kind === 'web');
+    const link = webLinks[sv.idx];
+    const qr = QRCode.create(link.url, { errorCorrectionLevel: 'L' });
+    const n = qr.modules.size, q = 2; // quiet zone
+    const size = n + q * 2;
+    const boxW = Math.max(size + 4, Math.min(scr.w - 2, link.url.length + 4, 76));
+    const boxH = Math.ceil(size / 2) + 7;
+    if (boxW > scr.w || boxH > scr.h) {
+      this.sys('TERMINAL TOO SMALL FOR A QR CODE — ENLARGE IT OR USE THE LINKS ABOVE', COL.red);
+      this.shareView = null;
+      return;
+    }
+    const x0 = Math.floor((scr.w - boxW) / 2), y0 = Math.max(0, Math.floor((scr.h - boxH) / 2));
+    const bg: RGB = [2, 8, 20];
+    scr.fill(x0, y0, boxW, boxH, bg);
+    scr.box(x0, y0, boxW, boxH, COL.cyan, `SHARE ${sv.idx + 1}/${webLinks.length}`, COL.white);
+    scr.put(x0 + 2, y0 + 1, link.label.slice(0, boxW - 4), COL.yellow, bg, true);
+    const dark = (r: number, c: number) => r >= q && c >= q && r < n + q && c < n + q && qr.modules.get(r - q, c - q) === 1;
+    const black: RGB = [0, 0, 0], white: RGB = [255, 255, 255];
+    const qx = x0 + Math.floor((boxW - size) / 2);
+    for (let r = 0; r < size; r += 2) {
+      for (let c = 0; c < size; c++) {
+        // upper half block: fg = top module, bg = bottom module
+        scr.put(qx + c, y0 + 2 + r / 2, '▀', dark(r, c) ? black : white, r + 1 < size && dark(r + 1, c) ? black : white);
+      }
+    }
+    const ty = y0 + 2 + Math.ceil(size / 2);
+    scr.put(x0 + 2, ty, link.url.slice(0, boxW - 4), COL.green, bg);
+    scr.put(x0 + 2, ty + 1, `scan with the phone camera · same Wi-Fi as ${sv.info.host}`.slice(0, boxW - 4), COL.dim, bg);
+    scr.put(x0 + 2, ty + 2, '← → next code · Esc close · terminal join commands are in the log'.slice(0, boxW - 4), COL.dim, bg);
   }
 
   private renderInput(y: number, w: number) {

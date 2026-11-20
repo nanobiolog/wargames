@@ -1,6 +1,6 @@
 // Builds the dynamic vector content (units, missiles, blasts, labels) for each frame.
 import {
-  ballisticPos, geoCircle, gcPath, softKillKm, type Contact, type Missile, type Snapshot, type StaticWorld,
+  ballisticPos, geoCircle, gcPath, softKillKm, distKm, type Contact, type Missile, type Snapshot, type StaticWorld,
   type Unit, type Side, type PlanProposal, type LatLon,
 } from '@coldlaunch/shared';
 import { DynBatch } from './gl.ts';
@@ -58,31 +58,93 @@ export interface SceneState {
 }
 
 type Pt = [number, number];
+const circle = (r: number, cx = 0, cy = 0, n = 14): Pt[] => Array.from({ length: n + 1 }, (_, i) => [cx + Math.cos((i / n) * Math.PI * 2) * r, cy + Math.sin((i / n) * Math.PI * 2) * r] as Pt);
+const star = (r: number, ri: number): Pt[] => Array.from({ length: 11 }, (_, i) => {
+  const a = -Math.PI / 2 + (i * Math.PI) / 5, rr = i % 2 ? ri : r;
+  return [Math.cos(a) * rr, Math.sin(a) * rr] as Pt;
+});
+
+/** Vector unit symbols (y down, ~[-2,2] units, scaled by `size`). Ships/subs face +x (bow right). */
 const ICONS: Record<string, Pt[][]> = {
-  silo: [[[-1, 0.8], [0, -0.9], [1, 0.8], [-1, 0.8]]],
-  airbase: [[[-1.1, 0.6], [1.1, 0.6]], [[-0.6, -0.1], [0.6, -0.1]], [[0, -1], [0, 1]], [[-0.4, 1], [0.4, 1]]],
-  afb_int: [[[0, -1], [1, 0], [0, 1], [-1, 0], [0, -1]], [[-0.4, 0], [0.4, 0]]],
-  radar: [[[-0.9, 0.9], [-0.9, -0.2], [0, -0.9], [0.9, -0.2], [0.9, 0.9]], [[-0.3, 0.3], [0.3, 0.3]]],
-  abm: [[[0, -1.1], [0.8, 0], [0, 1.1], [-0.8, 0], [0, -1.1]], [[0, -1.1], [0, 1.1]]],
-  command: [[[0, -1.1], [0.3, -0.3], [1.1, -0.3], [0.45, 0.2], [0.7, 1], [0, 0.5], [-0.7, 1], [-0.45, 0.2], [-1.1, -0.3], [-0.3, -0.3], [0, -1.1]]],
-  navalbase: [[[-0.8, -0.8], [0.8, -0.8], [0.8, 0.8], [-0.8, 0.8], [-0.8, -0.8]], [[0, -0.8], [0, 0.8]]],
-  carrier: [[[-1.4, 0], [-0.9, -0.5], [1.0, -0.5], [1.4, 0], [1.0, 0.5], [-0.9, 0.5], [-1.4, 0]], [[0.2, -0.5], [0.2, -0.9], [0.6, -0.9], [0.6, -0.5]]],
-  ssbn: [[[-1.3, 0.2], [-0.9, 0.6], [1.0, 0.6], [1.3, 0.2], [-1.3, 0.2]], [[-0.2, 0.2], [-0.2, -0.4], [0.3, -0.4], [0.3, 0.2]]],
-  ssn: [[[-1.0, 0.2], [-0.7, 0.55], [0.8, 0.55], [1.0, 0.2], [-1.0, 0.2]], [[0, 0.2], [0, -0.2]]],
-  bomber: [[[1.2, 0], [-0.8, -0.9], [-0.4, 0], [-0.8, 0.9], [1.2, 0]]],
-  unknown: [[[-0.8, -0.8], [0.8, -0.8], [0.8, 0.8], [-0.8, 0.8], [-0.8, -0.8]]],
-  city: [[[0.9, 0], [0.64, 0.64], [0, 0.9], [-0.64, 0.64], [-0.9, 0], [-0.64, -0.64], [0, -0.9], [0.64, -0.64], [0.9, 0]]],
+  // ICBM field: missile standing inside a launch-area triangle
+  silo: [
+    [[-1.2, 1], [0, -1.2], [1.2, 1], [-1.2, 1]],
+    [[0, 0.75], [0, -0.35]], [[-0.18, -0.15], [0, -0.55], [0.18, -0.15]], [[-0.28, 0.75], [0, 0.45], [0.28, 0.75]],
+  ],
+  // bomber base: runway with a swept-wing bomber parked above it
+  airbase: [
+    [[-1.4, 0.8], [1.4, 0.8]], [[-1.4, 1.1], [1.4, 1.1]], [[-0.9, 0.95], [-0.5, 0.95]], [[0.5, 0.95], [0.9, 0.95]],
+    [[0, -1.2], [0, 0.4]], [[-1.2, 0.05], [0, -0.5], [1.2, 0.05]], [[-0.45, 0.4], [0, 0.18], [0.45, 0.4]],
+  ],
+  // interceptor base: delta-wing fighter
+  afb_int: [
+    [[0, -1.3], [0.35, -0.2], [1, 0.75], [0.3, 0.55], [0, 1], [-0.3, 0.55], [-1, 0.75], [-0.35, -0.2], [0, -1.3]],
+    [[0, -0.6], [0, 0.4]],
+  ],
+  // airborne bomber group (rotated to heading; nose = +x)
+  bomber: [
+    [[-1.3, 0], [1.4, 0]], [[1.4, 0], [1.6, 0]],
+    [[0.35, -0.08], [-0.55, -1.4], [-0.85, -1.4], [-0.25, -0.08]], [[0.35, 0.08], [-0.55, 1.4], [-0.85, 1.4], [-0.25, 0.08]],
+    [[-0.6, -0.75], [-0.35, -0.75]], [[-0.6, 0.75], [-0.35, 0.75]],
+    [[-1.05, 0], [-1.45, -0.55]], [[-1.05, 0], [-1.45, 0.55]],
+  ],
+  // early-warning radar: dish on a mast
+  radar: [
+    [[-1.1, -1], [-0.7, -0.3], [0, 0], [0.7, -0.3], [1.1, -1]], [[0, 0], [0, -1]], [[-0.18, -1], [0.18, -1]],
+    [[0, 0], [0, 1]], [[-0.8, 1], [0.8, 1]], [[-0.45, 1], [0, 0.45], [0.45, 1]],
+  ],
+  // ABM site: shield arc over an interceptor missile
+  abm: [
+    [[-1.2, 0.3], [-1, -0.6], [0, -1.25], [1, -0.6], [1.2, 0.3]],
+    [[0, 1], [0, -0.55]], [[-0.18, -0.35], [0, -0.75], [0.18, -0.35]], [[-0.3, 1], [0, 0.7], [0.3, 1]],
+  ],
+  // national command post / hardened bunker
+  command: [circle(1.25), star(0.95, 0.4)],
+  // naval base: anchor
+  navalbase: [
+    circle(0.25, 0, -1.05, 8), [[0, -0.8], [0, 1]], [[-0.65, -0.45], [0.65, -0.45]],
+    [[-1.1, 0.25], [-0.85, 0.7], [-0.4, 0.98], [0, 1], [0.4, 0.98], [0.85, 0.7], [1.1, 0.25]],
+    [[-1.1, 0.25], [-1.25, 0.55]], [[-1.1, 0.25], [-0.8, 0.35]], [[1.1, 0.25], [1.25, 0.55]], [[1.1, 0.25], [0.8, 0.35]],
+  ],
+  // carrier battle group (top view): angled flight deck, island, two escorts
+  carrier: [
+    [[-1.7, -0.4], [1.3, -0.4], [1.8, 0], [1.3, 0.45], [-1.7, 0.45], [-1.7, -0.4]],
+    [[-1.4, 0.3], [0.5, -0.4]], [[-1.2, 0], [1.4, 0]],
+    [[0.25, 0.45], [0.25, 0.8], [0.75, 0.8], [0.75, 0.45]],
+    [[2.4, -0.95], [2.65, -0.75], [2.4, -0.55], [2.15, -0.75], [2.4, -0.95]],
+    [[-2.3, 0.85], [-2.05, 1.05], [-2.3, 1.25], [-2.55, 1.05], [-2.3, 0.85]],
+  ],
+  // ballistic-missile submarine (side view): long hull, sail, raised missile deck, rudder
+  ssbn: [
+    [[-1.8, 0.1], [-1.5, -0.25], [1.35, -0.25], [1.9, 0.05], [1.35, 0.38], [-1.5, 0.38], [-1.8, 0.1]],
+    [[0.55, -0.25], [0.65, -0.8], [1.05, -0.8], [1.1, -0.25]], [[0.55, -0.6], [1.25, -0.6]],
+    [[-1.1, -0.25], [-1.1, -0.48], [0.25, -0.48], [0.25, -0.25]], [[-0.65, -0.48], [-0.65, -0.25]], [[-0.2, -0.48], [-0.2, -0.25]],
+    [[-1.8, 0.1], [-2.1, -0.35]], [[-1.8, 0.1], [-2.1, 0.55]],
+  ],
+  // attack submarine (side view): shorter hull, sail
+  ssn: [
+    [[-1.35, 0.1], [-1.05, -0.22], [0.95, -0.22], [1.45, 0.05], [0.95, 0.33], [-1.05, 0.33], [-1.35, 0.1]],
+    [[0.3, -0.22], [0.4, -0.7], [0.75, -0.7], [0.8, -0.22]], [[0.3, -0.5], [0.95, -0.5]],
+    [[-1.35, 0.1], [-1.6, -0.28]], [[-1.35, 0.1], [-1.6, 0.48]],
+  ],
+  // unidentified contact: diamond with a question mark
+  unknown: [
+    [[0, -1.2], [1.2, 0], [0, 1.2], [-1.2, 0], [0, -1.2]],
+    [[-0.3, -0.35], [0, -0.6], [0.3, -0.4], [0, -0.05], [0, 0.2]], [[0, 0.45], [0, 0.55]],
+  ],
+  city: [circle(0.9, 0, 0, 10)],
 };
 
 const sideCol = (s: Side) => (s === 'USA' ? COL.usa : COL.ussr);
 const dimC = (c: number[], f: number) => [c[0], c[1], c[2], (c[3] ?? 1) * f];
 
-export function icon(b: DynBatch, lat: number, lon: number, kind: string, col: number[], size: number, w: number, rot = 0) {
+export function icon(b: DynBatch, lat: number, lon: number, kind: string, col: number[], size: number, w: number, rot = 0, mirror = false) {
   const shape = ICONS[kind] ?? ICONS.unknown;
   const cs = Math.cos(rot), sn = Math.sin(rot);
+  const mx = mirror ? -1 : 1;
   for (const poly of shape) {
     for (let i = 1; i < poly.length; i++) {
-      const [x1, y1] = poly[i - 1], [x2, y2] = poly[i];
+      const [x1, y1] = [poly[i - 1][0] * mx, poly[i - 1][1]], [x2, y2] = [poly[i][0] * mx, poly[i][1]];
       b.seg(lon, lat, lon, lat, col, w, 0,
         (x1 * cs - y1 * sn) * size, (x1 * sn + y1 * cs) * size, (x2 * cs - y2 * sn) * size, (x2 * sn + y2 * cs) * size);
     }
@@ -179,9 +241,12 @@ export function buildWorld(b: DynBatch, st: SceneState) {
     let col = unknown ? COL.unknown : sideCol(u.side);
     if (dead) col = dimC(col, 0.3);
     if (st.selected === u.id) col = COL.reticle;
-    const size = (u.kind === 'carrier' || u.kind === 'ssbn' ? 6 : 5) * dpr;
-    const rot = u.kind === 'bomber' ? (((u.heading ?? 0) - 90) * Math.PI) / 180 : 0;
-    icon(b, u.lat, u.lon, unknown ? 'unknown' : u.kind, col, size, lw, rot);
+    const size = (u.kind === 'carrier' || u.kind === 'ssbn' || u.kind === 'ssn' ? 6.8 : u.kind === 'bomber' ? 7 : 7) * dpr;
+    const hdg = u.heading ?? 90;
+    // bombers and carriers turn to their heading; submarines (side view) just face east or west
+    const rot = u.kind === 'bomber' || (u.kind === 'carrier' && u.status === 'moving') ? ((hdg - 90) * Math.PI) / 180 : 0;
+    const mirror = (u.kind === 'ssbn' || u.kind === 'ssn' || u.kind === 'carrier') && rot === 0 && u.status === 'moving' && hdg > 180;
+    icon(b, u.lat, u.lon, unknown ? 'unknown' : u.kind, col, size, lw * 0.9, rot, mirror);
     if (dead) {
       b.seg(u.lon, u.lat, u.lon, u.lat, col, lw, 0, -size, -size, size, size);
       b.seg(u.lon, u.lat, u.lon, u.lat, col, lw, 0, -size, size, size, -size);
@@ -306,6 +371,29 @@ export function buildPanelLabels(b: DynBatch, st: SceneState, xf: Xform, focusLa
     if (!p || p[0] < -20 || p[1] < -20 || p[0] > xf.w + 20 || p[1] > xf.h + 20) continue;
     occ.tryTake(p[0] - 5 * dpr, p[1] - 5 * dpr, 10 * dpr, 10 * dpr);
     picks.push({ id: u.id, x: p[0], y: p[1], name: u.name });
+  }
+  // missile heads are clickable too (lifted by altitude like the drawing)
+  if (snap && L.missiles) {
+    const lift = 0.45 * (xf.ky / 111);
+    for (const m of snap.missiles) {
+      const pos = ballisticPos(m.from, m.to, m.launchT, m.impactT, m.apexKm, st.tNow);
+      const p = toScreen(xf, pos.p.lat, pos.p.lon);
+      if (!p) continue;
+      const y = p[1] - pos.alt * lift;
+      picks.push({ id: m.id, x: p[0], y, name: `${m.type} ${m.side} → ${m.target}` });
+      if (m.id === st.selected) {
+        const r = 16 * dpr;
+        for (let i = 0; i < 40; i++) {
+          const a0 = (i / 40) * Math.PI * 2, a1 = ((i + 1) / 40) * Math.PI * 2;
+          b.seg(pos.p.lon, pos.p.lat, pos.p.lon, pos.p.lat, COL.reticle, 1.6 * dpr, 0, Math.cos(a0) * r, Math.sin(a0) * r, Math.cos(a1) * r, Math.sin(a1) * r, pos.alt, pos.alt);
+        }
+        const km = Math.round(distKm(pos.p, m.to) );
+        const eta = Math.max(0, m.impactT - st.tNow);
+        const label = `${m.type} → ${m.target}  ${km} KM  T-${Math.floor(eta / 60)}:${String(Math.floor(eta % 60)).padStart(2, '0')}`;
+        const segs = textSegments(label, 8 * dpr, 0);
+        for (let i = 0; i < segs.length; i += 4) b.seg(pos.p.lon, pos.p.lat, pos.p.lon, pos.p.lat, COL.reticle, lw, 0, segs[i] + r + 6 * dpr, segs[i + 1], segs[i + 2] + r + 6 * dpr, segs[i + 3], pos.alt, pos.alt);
+      }
+    }
   }
   if (!L.labels) return picks;
 

@@ -207,17 +207,38 @@ async function main() {
     };
     collect(landGeom);
     const xs: number[][] = Array.from({ length: H }, () => []);
+    const addEdge = (x1: number, y1: number, x2: number, y2: number) => {
+      const r0 = Math.ceil((90 - Math.max(y1, y2)) / res - 0.5);
+      const r1 = Math.floor((90 - Math.min(y1, y2)) / res - 0.5);
+      for (let r = Math.max(0, r0); r <= Math.min(H - 1, r1); r++) {
+        const y = 90 - (r + 0.5) * res;
+        if ((y1 > y) === (y2 > y)) continue;
+        xs[r].push(x1 + ((y - y1) / (y2 - y1)) * (x2 - x1));
+      }
+    };
     for (const ring of rings) {
+      const seam: number[] = [];
       for (let i = 0; i < ring.length - 1; i++) {
         const [x1, y1] = ring[i], [x2, y2] = ring[i + 1];
-        if (Math.abs(x2 - x1) > 180) continue; // antimeridian edge
-        const r0 = Math.ceil((90 - Math.max(y1, y2)) / res - 0.5);
-        const r1 = Math.floor((90 - Math.min(y1, y2)) / res - 0.5);
-        for (let r = Math.max(0, r0); r <= Math.min(H - 1, r1); r++) {
-          const y = 90 - (r + 0.5) * res;
-          if ((y1 > y) === (y2 > y)) continue;
-          xs[r].push(x1 + ((y - y1) / (y2 - y1)) * (x2 - x1));
+        if (Math.abs(x2 - x1) > 180) {
+          // edge crosses the antimeridian: split it at ±180
+          const x2u = x2 + (x1 > 0 ? 360 : -360);
+          const edge = x1 > 0 ? 180 : -180;
+          // seam points often sit exactly on ±180, which makes the interpolation 0/0
+          const ym = Math.abs(x2u - x1) < 1e-9 ? (y1 + y2) / 2 : y1 + ((edge - x1) / (x2u - x1)) * (y2 - y1);
+          addEdge(x1, y1, edge, ym);
+          addEdge(-edge, ym, x2, y2);
+          seam.push(ym);
+          continue;
         }
+        addEdge(x1, y1, x2, y2);
+      }
+      // A ring that wraps the globe (Eurasia + Chukotka) leaves its boundary along the 180° meridian implicit:
+      // close it with vertical edges on both sides between consecutive seam crossings.
+      seam.sort((a, b) => a - b);
+      for (let k = 0; k + 1 < seam.length; k += 2) {
+        addEdge(180, seam[k], 180, seam[k + 1]);
+        addEdge(-180, seam[k], -180, seam[k + 1]);
       }
     }
     let landCells = 0;

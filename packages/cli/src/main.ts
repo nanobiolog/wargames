@@ -10,7 +10,7 @@
 import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { homedir, networkInterfaces } from 'node:os';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_PORT, GameClient, enemyOf, parseLink, type Side, type Role } from '@coldlaunch/shared';
@@ -45,7 +45,8 @@ if (flag('--help') || flag('-h')) {
   --display <mode>         electron (default) | browser (a browser tab) | none — save a default with npm run setup
   --web, --browser         same as --display browser
   --all-monitors           Electron: one fullscreen window per monitor (wall, CONUS, missiles, stats, ...)
-  --host 0.0.0.0           allow other devices on your LAN to join (token still required)
+  --lan                    share with phones / other PCs on your network from the start
+                           (or type "share" in the game any time for QR codes)
   --no-tui                 run the server only and print the session link
   --join <link>            connect this terminal to an existing session
 
@@ -79,13 +80,6 @@ function openGui(link: string, allMonitors = false) {
   const child = spawn(electron, [guiDir, `--link=${link}`, ...(allMonitors ? ['--all-monitors'] : [])], { detached: true, stdio: 'ignore', env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined } });
   child.unref();
   return true;
-}
-
-function lanAddress(): string | undefined {
-  for (const list of Object.values(networkInterfaces())) {
-    for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal) return a.address;
-  }
-  return undefined;
 }
 
 function openBrowser(url: string) {
@@ -136,7 +130,7 @@ async function main() {
   if (!humanOpponent) ais.push(new AiOpponent(server, enemy, opponent, { personality, log }).attach());
   if (aiVsAi) ais.push(new AiOpponent(server, side, opponent, { personality: 1 - personality * 0.6, log }).attach());
   server.aiLabel = humanOpponent ? `${enemy}=human` : ais.map((a) => `${a.side}=${a.label}`).join(' ');
-  if (server.host === '0.0.0.0') server.publicHost = lanAddress();
+  if (flag('--lan')) await server.enableLan();
 
   const role: Role = aiVsAi ? 'SPECTATOR' : side;
   const link = server.link(role);
@@ -159,23 +153,17 @@ async function main() {
   if (display !== 'none') openWall();
 
   function joinLinks(): [string, string][] {
-    const lan = !!server.publicHost;
-    const out: [string, string][] = [
-      ['your browser display', server.webLink(role)],
-      ['spectator wall (any PC)', server.webLink('SPECTATOR', 'wall', lan)],
-      ['missile board (any PC)', server.webLink(role, 'missiles', lan)],
-      [`${enemy} player browser`, server.webLink(enemy, 'wall', lan)],
-      [`${enemy} player terminal`, `npm start -- --join "${server.link(enemy, lan)}"`],
-      ['your terminal elsewhere', `npm start -- --join "${server.link(role, lan)}"`],
-    ];
-    if (!lan) out.push(['other PCs', 'restart with --host 0.0.0.0 to allow LAN connections']);
+    const info = server.shareInfo(role);
+    const out: [string, string][] = [['your browser display', server.webLink(role)]];
+    if (info.lan) for (const l of info.links) out.push([l.label, l.url]);
+    else out.push(['phones / other PCs', 'type "share" in the game (or start with --lan) to get QR codes and LAN links']);
     return out;
   }
   if (useTui) log(`join links:\n${joinLinks().map(([a, b]) => `  ${a.padEnd(26)} ${b}`).join('\n')}`);
 
   if (!useTui) {
     console.log(`\n  STRATCOM // COLD LAUNCH — server running (opponent: ${server.aiLabel})\n`);
-    for (const [a, b] of joinLinks()) console.log(`  ${a.padEnd(26)} ${b}`);
+    for (const [a, b] of joinLinks()) console.log(`  ${a.padEnd(38)} ${b}`);
     console.log('\n  Add &preset=conus|europe|missiles|stats|world|polar|… to any browser link — one per monitor.\n');
     return;
   }

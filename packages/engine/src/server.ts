@@ -1,11 +1,11 @@
 import { WebSocketServer, type WebSocket } from 'ws';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, createReadStream } from 'node:fs';
-import { createServer, type Server } from 'node:http';
-import { homedir } from 'node:os';
+import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
+import { homedir, networkInterfaces } from 'node:os';
 import { join, normalize, extname } from 'node:path';
 import {
-  ClientMsgSchema, makeLink, type Command, type PlanProposal, type Role, type ServerMsg, type Side,
+  ClientMsgSchema, makeLink, enemyOf, type Command, type PlanProposal, type Role, type ServerMsg, type Side, type ShareInfo,
 } from '@coldlaunch/shared';
 import { Game, TICK_SEC } from './game.ts';
 
@@ -13,7 +13,18 @@ export interface Advisor {
   (side: Side, text: string, game: Game): Promise<PlanProposal | { error: string }>;
 }
 
+/** First non-internal IPv4 address (what other devices on the LAN use to reach this machine). */
+export function lanAddress(): string | undefined {
+  for (const list of Object.values(networkInterfaces())) {
+    for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal) return a.address;
+  }
+  return undefined;
+}
+
+const isLoopback = (addr?: string) => !!addr && (addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1');
+
 interface Client {
+  local: boolean;
   ws: WebSocket;
   role: Role;
   kind: string;
@@ -72,41 +83,95 @@ export class GameServer {
     this.staticDir = opts.staticDir;
   }
 
-  /** Browser URL for the wall display (served by this server). */
   /** Host name other machines should use (set to the LAN IP when listening on 0.0.0.0). */
   publicHost?: string;
+  /** Port reachable from the LAN (same as `port` when listening on 0.0.0.0, else the extra LAN listener). */
+  lanPort?: number;
+  private lanHttp?: Server;
 
-  webLink(role?: Role, preset?: string, forLan = false) {
-    const host = forLan && this.publicHost ? this.publicHost : this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
+  get lanEnabled() {
+    return this.host === '0.0.0.0' || !!this.lanHttp;
+  }
+
+  /** Browser URL for the wall display (served by this server). */
+  webLink(role?: Role, preset?: string, forLan = false, extra: Record<string, string> = {}) {
+    const lan = forLan && this.lanEnabled && this.publicHost;
+    const host = lan ? this.publicHost : this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
+    const port = lan ? this.lanPort ?? this.port : this.port;
     const q = new URLSearchParams({ token: this.token });
     if (role) q.set('role', role);
     if (preset) q.set('preset', preset);
-    return `http://${host}:${this.port}/?${q}`;
+    for (const [k, v] of Object.entries(extra)) q.set(k, v);
+    return `http://${host}:${port}/?${q}`;
   }
 
   link(role?: Role, forLan = false) {
-    const host = forLan && this.publicHost ? this.publicHost : this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
-    return makeLink(host, this.port, this.token, role);
+    const lan = forLan && this.lanEnabled && this.publicHost;
+    const host = lan ? this.publicHost! : this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
+    return makeLink(host, lan ? this.lanPort ?? this.port : this.port, this.token, role);
+  }
+
+  /**
+   * Make the session reachable from other devices on the LAN without a restart:
+   * opens a second listener on 0.0.0.0 (next free port) that serves the same game.
+   */
+  async enableLan(): Promise<void> {
+    this.publicHost ??= lanAddress();
+    if (this.lanEnabled) { this.lanPort ??= this.port; return; }
+    for (let p = this.port + 1; p < this.port + 20; p++) {
+      const srv = createServer((req, res) => this.serveStatic(req, res));
+      srv.on('upgrade', (req, sock, head) => this.wss!.handleUpgrade(req, sock, head, (ws) => this.wss!.emit('connection', ws, req)));
+      const ok = await new Promise<boolean>((resolve) => {
+        srv.once('error', () => resolve(false));
+        srv.listen(p, '0.0.0.0', () => resolve(true));
+      });
+      if (ok) { this.lanHttp = srv; this.lanPort = p; return; }
+    }
+    throw new Error('no free port for LAN sharing');
+  }
+
+  /** Share links for a given player role (used by the share panel / QR codes / `link`). */
+  shareInfo(role: Role): ShareInfo {
+    const side: Side = role === 'SPECTATOR' ? this.playerSide : role;
+    const other = enemyOf(side);
+    const lan = this.lanEnabled && !!this.publicHost;
+    return {
+      lan,
+      host: lan ? this.publicHost! : '127.0.0.1',
+      port: lan ? this.lanPort ?? this.port : this.port,
+      links: [
+        { label: 'Phone: map + console (your side)', url: this.webLink(side, 'phone', true), kind: 'web' },
+        { label: 'Full war-room wall (your side)', url: this.webLink(side, 'wall', true), kind: 'web' },
+        { label: 'Spectator wall (TV / big screen)', url: this.webLink('SPECTATOR', 'wall', true), kind: 'web' },
+        { label: `Second player — ${other} (phone)`, url: this.webLink(other, 'phone', true), kind: 'web' },
+        { label: `Second player — ${other} (terminal)`, url: `npm start -- --join "${this.link(other, true)}"`, kind: 'terminal' },
+        { label: 'Your side in a terminal on another PC', url: `npm start -- --join "${this.link(side, true)}"`, kind: 'terminal' },
+      ],
+    };
+  }
+
+  private serveStatic(req: IncomingMessage, res: ServerResponse) {
+    const dir = this.staticDir;
+    if (!dir || !existsSync(dir)) {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      return res.end('wall display not built — run: npm run gui:build');
+    }
+    const path = decodeURIComponent((req.url ?? '/').split('?')[0]);
+    const file = normalize(join(dir, path === '/' ? 'index.html' : path));
+    if (!file.startsWith(normalize(dir)) || !existsSync(file) || !statSync(file).isFile()) {
+      res.writeHead(404);
+      return res.end('not found');
+    }
+    res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-cache' });
+    createReadStream(file).pipe(res);
   }
 
   async start() {
-    this.http = createServer((req, res) => {
-      const dir = this.staticDir;
-      if (!dir || !existsSync(dir)) {
-        res.writeHead(404, { 'content-type': 'text/plain' });
-        return res.end('wall display not built — run: npm run gui:build');
-      }
-      const path = decodeURIComponent((req.url ?? '/').split('?')[0]);
-      const file = normalize(join(dir, path === '/' ? 'index.html' : path));
-      if (!file.startsWith(normalize(dir)) || !existsSync(file) || !statSync(file).isFile()) {
-        res.writeHead(404);
-        return res.end('not found');
-      }
-      res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-cache' });
-      createReadStream(file).pipe(res);
-    });
-    this.wss = new WebSocketServer({ server: this.http, maxPayload: 64 * 1024 });
-    this.wss.on('connection', (ws) => this.onConnect(ws));
+    this.http = createServer((req, res) => this.serveStatic(req, res));
+    if (this.host === '0.0.0.0') { this.publicHost ??= lanAddress(); this.lanPort = this.port; }
+    this.wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+    this.http.on('upgrade', (req, sock, head) => this.wss!.handleUpgrade(req, sock, head, (ws) => this.wss!.emit('connection', ws, req)));
+    this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => this.onConnect(ws, req));
     await new Promise<void>((resolve, reject) => {
       this.http!.once('error', reject);
       this.http!.listen(this.port, this.host, () => resolve());
@@ -114,11 +179,13 @@ export class GameServer {
     this.timer = setInterval(() => this.loop(), TICK_SEC * 1000);
   }
 
+
   stop() {
     clearInterval(this.timer);
     for (const c of this.clients) c.ws.close();
     this.wss?.close();
     this.http?.close();
+    this.lanHttp?.close();
   }
 
   /** Called every tick (AI drivers subscribe here). */
@@ -163,8 +230,8 @@ export class GameServer {
     }
   }
 
-  private onConnect(ws: WebSocket) {
-    const c: Client = { ws, role: 'SPECTATOR', kind: 'other', eventIdx: 0, authed: false };
+  private onConnect(ws: WebSocket, req?: IncomingMessage) {
+    const c: Client = { ws, role: 'SPECTATOR', kind: 'other', eventIdx: 0, authed: false, local: isLoopback(req?.socket.remoteAddress) };
     this.clients.add(c);
     ws.on('close', () => this.clients.delete(c));
     ws.on('message', (data) => {
@@ -249,6 +316,14 @@ export class GameServer {
         this.game = new Game(m.seed);
         this.resetClients();
         return this.send(c, { t: 'result', ok: true, msg: 'NEW SCENARIO STARTED' });
+      }
+      case 'share': {
+        if (m.enable && !this.lanEnabled) {
+          if (!c.local) return this.send(c, { t: 'result', ok: false, msg: 'LAN sharing can only be switched on from the host machine' });
+          await this.enableLan();
+          this.game.emit({ kind: 'info', text: `LAN SHARING ON — OTHER DEVICES CAN JOIN AT ${this.publicHost}:${this.lanPort}` });
+        }
+        return this.send(c, { t: 'share', info: this.shareInfo(c.role) });
       }
       case 'ping':
         return this.send(c, { t: 'pong' });

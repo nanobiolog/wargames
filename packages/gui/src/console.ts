@@ -1,6 +1,6 @@
 // In-display command console: the same orders, help and type-ahead as the terminal, inside any display tab.
 import {
-  parseCommandLine, describeCommand, helpLines, suggest, fmtLatLon, KIND_LABEL,
+  parseCommandLine, describeCommand, helpLines, suggest, fmtLatLon, KIND_LABEL, selectionDetails, ballisticPos,
   type GameClient, type GameEvent, type PlanProposal, type Unit, type Contact, type Suggestion,
 } from '@coldlaunch/shared';
 import type { SceneState, LayerKey } from './scene.ts';
@@ -19,6 +19,7 @@ export interface ConsoleHost {
   saveLayers(): void;
   webLinks(): [string, string][];
   onSelect(): void;
+  share(): void;
 }
 
 const h = (tag: string, cls = '', text = '') => {
@@ -86,6 +87,14 @@ export class Console {
       setTimeout(() => this.input.focus(), 0);
       this.refresh();
     }
+  }
+
+  private lastIdleRefresh = 0;
+  /** Keep next-order suggestions current while the line is empty (called on every snapshot). */
+  onSnapshot() {
+    if (!this.open || this.input.value || performance.now() - this.lastIdleRefresh < 1000) return;
+    this.lastIdleRefresh = performance.now();
+    this.refresh();
   }
 
   setRole(role: string) {
@@ -267,12 +276,29 @@ export class Console {
         this.host.saveLayers();
         return this.print(`layer ${name} ${L[name as LayerKey] ? 'on' : 'off'}`, 'c-dim');
       }
+      case 'info':
       case 'select': {
+        const m = c.snap?.missiles.find((x) => x.id === (arg || this.host.st.selected || '').toLowerCase());
+        if (m && c.snap) {
+          this.host.st.selected = m.id;
+          this.host.onSelect();
+          const pos = ballisticPos(m.from, m.to, m.launchT, m.impactT, m.apexKm, c.snap.t).p;
+          this.host.flyTo(pos.lat, pos.lon, undefined, `${m.type} → ${m.target}`);
+          const d = selectionDetails(m.id, c.snap);
+          if (d) for (const l of d.lines) this.print(`${l.label.padEnd(11)} ${l.value}`, 'c-magenta');
+          return;
+        }
+        if (!arg && this.host.st.selected && c.snap) {
+          const d = selectionDetails(this.host.st.selected, c.snap);
+          if (d) { this.print(d.title, 'c-magenta'); for (const l of d.lines) this.print(`${l.label.padEnd(11)} ${l.value}`, 'c-magenta'); return; }
+        }
         const p = this.findPlace(arg);
         if (!p?.id) return this.print(`unknown unit ${arg}`, 'c-red');
         this.host.st.selected = p.id;
         this.host.onSelect();
         c.focus({ lat: p.lat, lon: p.lon, unit: p.id, label: p.name });
+        const d = c.snap ? selectionDetails(p.id, c.snap) : null;
+        if (d) for (const l of d.lines) this.print(`${l.label.padEnd(11)} ${l.value}`, 'c-magenta');
         return this.host.flyTo(p.lat, p.lon, undefined, p.name);
       }
       case 'list': {
@@ -288,6 +314,10 @@ export class Console {
         }
         return list.length ? undefined : this.print('none', 'c-dim');
       }
+      case 'share':
+      case 'qr':
+        this.print('opening the share panel (QR codes)…', 'c-dim');
+        return this.host.share();
       case 'link':
         for (const [label, url] of this.host.webLinks()) this.print(`${label.padEnd(20)} ${url}`, 'c-green');
         return this.print('Share only with machines you trust — the token lets anyone join.', 'c-dim');

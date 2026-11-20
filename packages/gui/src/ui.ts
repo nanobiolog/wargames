@@ -1,10 +1,11 @@
 // DOM overlays: toolbar, layer/CRT panels, info card, context menu, targeting, toasts, connect dialog.
 import {
-  KIND_LABEL, fmtLatLon, describeCommand, type Command, type Contact, type GameClient, type GameEvent, type LatLon, type Unit,
+  KIND_LABEL, fmtLatLon, describeCommand, selectionDetails, type Command, type Contact, type GameClient, type GameEvent, type LatLon, type Unit,
 } from '@coldlaunch/shared';
 import type { FxSettings } from './gl.ts';
 import { LAYER_LIST, type LayerKey, type SceneState } from './scene.ts';
 import { PRESET_NAMES } from './wall.ts';
+import QRCode from 'qrcode';
 
 interface UiHost {
   client: GameClient;
@@ -61,7 +62,7 @@ export class Ui {
     this.toasts = h('div', 'toasts');
     this.connectBox = h('div', 'connect hidden');
     root.append(this.info, this.tip, this.menu, this.banner, this.toasts, this.connectBox);
-    for (const k of ['layers', 'crt', 'help', 'presets']) {
+    for (const k of ['layers', 'crt', 'help', 'presets', 'share']) {
       this.panels[k] = h('div', `panel hidden panel-${k}`);
       root.append(this.panels[k]);
     }
@@ -82,6 +83,7 @@ export class Ui {
       return b;
     };
     btn(`VIEW: ${PRESET_LABEL[this.host.getPreset()] ?? this.host.getPreset()}`, () => this.toggle('presets'), 'Choose what this window shows (1-9)');
+    btn('SHARE', () => this.openShare(), 'QR codes for phones and other PCs');
     btn('CONSOLE', () => this.host.toggleConsole(), '` — type orders right here');
     btn('LAYERS', () => this.toggle('layers'), 'L');
     btn('CRT', () => this.toggle('crt'), 'C');
@@ -164,6 +166,49 @@ export class Ui {
     });
   }
 
+  /** Share panel: switch on LAN sharing and show QR codes for phones / other PCs. */
+  async openShare(enable = false) {
+    const p = this.panels.share;
+    this.toggle('share');
+    if (p.classList.contains('hidden')) return;
+    p.innerHTML = '<div class="ph">SHARE WITH PHONES &amp; OTHER PCS</div><p class="dim">contacting game server…</p>';
+    const r = await this.host.client.share(enable);
+    if (!('links' in r)) { p.innerHTML += `<p class="bad">${r.msg}</p>`; return; }
+    p.innerHTML = '<div class="ph">SHARE WITH PHONES &amp; OTHER PCS</div>';
+    if (!r.lan) {
+      const note = h('p', '', 'Sharing is off: right now only this computer can open the game. Turn it on to let phones, tablets and other PCs on the same Wi-Fi join.');
+      const b = h('button', 'big', 'TURN ON LAN SHARING');
+      b.onclick = () => { this.toggle(''); void this.openShare(true); };
+      p.append(note, b, h('p', 'dim', 'Only the machine running the game can turn this on. Anyone with a link can join, so use trusted networks.'));
+      return;
+    }
+    const web = r.links.filter((l) => l.kind === 'web');
+    const big = h('div', 'qr');
+    const caption = h('div', 'qrcap');
+    const show = async (i: number) => {
+      big.innerHTML = await QRCode.toString(web[i].url, { type: 'svg', margin: 2, errorCorrectionLevel: 'L', color: { dark: '#000000', light: '#ffffff' } });
+      caption.textContent = web[i].label;
+      tabs.querySelectorAll('button').forEach((b, k) => b.classList.toggle('active', k === i));
+    };
+    const tabs = h('div', 'qrtabs');
+    web.forEach((l, i) => {
+      const b = h('button', '', l.label.replace(/ \(.*\)$/, '').replace('Second player — ', 'P2 ').replace('Phone: ', ''));
+      b.title = l.label;
+      b.onclick = () => void show(i);
+      tabs.append(b);
+    });
+    p.append(tabs, big, caption, h('p', 'dim', `Scan with the phone camera (same Wi-Fi as ${r.host}). Phone links open the map with a touch console.`));
+    for (const l of r.links) {
+      const row = h('div', 'linkrow');
+      const code = h('code', '', l.url);
+      const copy = h('button', 'small', 'COPY');
+      copy.onclick = () => void navigator.clipboard?.writeText(l.url).then(() => this.toast('COPIED', 'ok'), () => this.toast('copy not allowed here — select the text', 'bad'));
+      row.append(h('div', 'll', l.label), code, copy);
+      p.append(row);
+    }
+    await show(0);
+  }
+
   newWindow(preset: string) {
     if (window.wallHost) return void window.wallHost.newWindow(preset);
     const q = new URLSearchParams(location.search);
@@ -210,20 +255,16 @@ export class Ui {
   }
 
   updateInfo() {
-    const u = this.findUnit(this.host.st.selected);
-    if (!u) return this.info.classList.add('hidden');
-    const x = u as Unit;
-    const rows: string[] = [
-      `<div class="ih">${u.name}</div>`,
-      `<div>${u.id.toUpperCase()} · ${KIND_LABEL[u.kind]} · ${u.cls}</div>`,
-      `<div>${u.side} · ${u.status.toUpperCase()} · ${fmtLatLon(u)}</div>`,
-    ];
-    if (x.missiles !== undefined) rows.push(`<div>MISSILES ${x.missiles}${x.missilesMax ? '/' + x.missilesMax : ''} × ${x.warheads ?? 1} RV × ${x.yieldKt} KT</div>`);
-    if (x.aircraft !== undefined) rows.push(`<div>AIRCRAFT ${x.aircraft} × ${x.bombs ?? 0} WPN${x.fuel !== undefined ? ` · FUEL ${Math.round(x.fuel * 100)}%` : ''}</div>`);
-    if (x.target) rows.push(`<div class="warn">TARGET ${x.target}</div>`);
-    if (x.interceptors !== undefined) rows.push(`<div>INTERCEPTORS ${x.interceptors}</div>`);
-    if ('seenT' in u) rows.push(`<div class="dim">${(u as Contact).identified ? 'IDENTIFIED' : 'UNIDENTIFIED'} CONTACT</div>`);
-    this.info.innerHTML = rows.join('');
+    const id = this.host.st.selected;
+    const snap = this.host.client.snap;
+    const d = id && snap ? selectionDetails(id, snap) : null;
+    if (!d) {
+      if (id && snap && !snap.missiles.some((m) => m.id === id) && id.startsWith('m')) this.host.st.selected = null; // missile has landed
+      return this.info.classList.add('hidden');
+    }
+    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    this.info.innerHTML = `<div class="ih">${esc(d.title)}</div>` + d.lines
+      .map((l) => `<div class="irow ${l.tone ?? ''}"><span class="ik">${l.label}</span><span class="iv">${esc(l.value)}</span></div>`).join('');
     this.info.classList.remove('hidden');
   }
 

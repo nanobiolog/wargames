@@ -10,7 +10,8 @@
     "start": "electron ."
   },
   "dependencies": {
-    "@coldlaunch/shared": "*"
+    "@coldlaunch/shared": "*",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "electron": "^45.4.1",

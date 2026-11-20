@@ -1,7 +1,7 @@
 // WebSocket game client shared by the terminal, the Electron GUI and the MCP server.
 // Uses the global WebSocket (browsers, Electron, Node >= 22).
 import {
-  parseLink, type ClientMsg, type Command, type Focus, type PlanProposal, type ServerMsg,
+  parseLink, type ClientMsg, type Command, type Focus, type PlanProposal, type ServerMsg, type ShareInfo,
 } from './protocol.ts';
 import type { GameEvent, Role, Snapshot, StaticWorld } from './types.ts';
 
@@ -24,6 +24,7 @@ export class GameClient {
   private seq = 0;
   private pending = new Map<string, (r: Result) => void>();
   private pendingAsk = new Map<string, (r: PlanProposal | Result) => void>();
+  private pendingShare: ((i: ShareInfo | Result) => void)[] = [];
   private ls = {
     snap: new Set<Listener<Snapshot>>(),
     events: new Set<Listener<GameEvent[]>>(),
@@ -117,12 +118,18 @@ export class GameClient {
         if (f && m.id) { this.pending.delete(m.id); f({ ok: m.ok, msg: m.msg }); }
         const a = m.id ? this.pendingAsk.get(m.id) : undefined;
         if (a && m.id) { this.pendingAsk.delete(m.id); a({ ok: m.ok, msg: m.msg }); }
+        if (!f && !a && !m.ok && this.pendingShare.length) { this.pendingShare.shift()!({ ok: false, msg: m.msg }); break; }
         if (!f && !a) this.fire('status', m.msg);
         break;
       }
       case 'plan': {
         const a = m.askId ? this.pendingAsk.get(m.askId) : undefined;
         if (a && m.askId) { this.pendingAsk.delete(m.askId); a(m.plan); }
+        break;
+      }
+      case 'share': {
+        const f = this.pendingShare.shift();
+        f?.(m.info);
         break;
       }
       case 'planPreview':
@@ -163,6 +170,18 @@ export class GameClient {
     return new Promise((resolve) => {
       this.pending.set(id, resolve);
       this.raw({ t: 'plan', id, cmds });
+    });
+  }
+
+  /** Get share links; enable=true opens the session to the LAN (host machine only). */
+  share(enable = false): Promise<ShareInfo | Result> {
+    return new Promise((resolve) => {
+      this.pendingShare.push(resolve);
+      this.raw({ t: 'share', enable });
+      setTimeout(() => {
+        const i = this.pendingShare.indexOf(resolve);
+        if (i >= 0) { this.pendingShare.splice(i, 1); resolve({ ok: false, msg: 'TIMEOUT' }); }
+      }, 8000);
     });
   }
 

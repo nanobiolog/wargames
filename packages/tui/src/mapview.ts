@@ -318,7 +318,14 @@ export class MapView {
           for (let i = 0; i <= 16; i++) fut.push(ballisticPos(m.from, m.to, 0, 1, m.apexKm, pos.f + ((1 - pos.f) * i) / 16).p);
           this.pathLL(fut, dim(col, 0.35), 8, true);
         }
-        this.glyph(pos.p.lat, pos.p.lon, m.confirmed === false ? '?' : '●', col, undefined, undefined, true);
+        const sel = d.selected === m.id;
+        const c = this.glyph(pos.p.lat, pos.p.lon, m.confirmed === false ? '?' : '●', sel ? C.reticle : col, m.id, `${m.type} → ${m.target}`, true);
+        if (sel && c) {
+          const [x, y] = this.px(pos.p.lat, pos.p.lon);
+          cv.circle(x, y, 6, C.reticle, 12);
+          const eta = Math.max(0, m.impactT - snap.t);
+          this.label(c[0] + 2, c[1] - 1, `${m.type} → ${m.target} T-${Math.floor(eta / 60)}:${String(Math.floor(eta % 60)).padStart(2, '0')}`, C.reticle, 9);
+        }
       }
     }
 
@@ -341,7 +348,7 @@ export class MapView {
       if (dead && u.kind === 'bomber') return;
       const unknown = !own && !(u as Contact).identified;
       const col = dead ? dim(sideColor(u.side), 0.35) : unknown ? C.warn : sideColor(u.side);
-      const ch = dead ? '×' : unknown ? '◌' : KIND_GLYPH[u.kind];
+      const ch = dead ? '×' : unknown ? '◌' : u.kind === 'bomber' ? '↑↗→↘↓↙←↖'[Math.round((u.heading ?? 90) / 45) % 8] : KIND_GLYPH[u.kind];
       const isSel = d.selected && (u.id === d.selected);
       const c = this.glyph(u.lat, u.lon, ch, isSel ? C.reticle : col, u.id, u.name, !dead);
       if (!c) return;

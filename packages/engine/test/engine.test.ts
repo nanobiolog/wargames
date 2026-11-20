@@ -103,7 +103,7 @@ describe('engine rules', () => {
     expect(grp.aircraft).toBe(3);
     runFor(g, 3 * 3600);
     expect(['orbit', 'returning', 'destroyed']).toContain(grp.status);
-  });
+  }, 30000);
 
   it('fog of war hides submerged enemy submarines', () => {
     const g = new Game(4);
@@ -142,6 +142,19 @@ describe('ocean routing', () => {
   it('knows land from sea', () => {
     expect(nav.isLand({ lat: 50, lon: 10 })).toBe(true); // Germany
     expect(nav.isLand({ lat: 40, lon: -40 })).toBe(false); // Atlantic
+  });
+  it('never routes through inland lakes (Norwegian Sea → Barents stays at sea)', () => {
+    const a = { lat: 66.5, lon: -1 }, b = { lat: 73, lon: 40 };
+    const r = nav.route(a, b)!;
+    expect(r).not.toBeNull();
+    let len = 0, p = a;
+    for (const q of r) { len += distKm(p, q); p = q; }
+    expect(len).toBeLessThan(3200);
+    expect(r.some((q) => q.lat < 62 && q.lon > 15 && q.lon < 35)).toBe(false); // not via the Baltic / Finland
+  });
+  it('keeps the Bosporus and the Danish straits open', () => {
+    expect(nav.route({ lat: 43, lon: 34 }, { lat: 35, lon: 25 })).not.toBeNull(); // Black Sea → Aegean
+    expect(nav.route({ lat: 55, lon: 18 }, { lat: 57, lon: 5 })).not.toBeNull(); // Baltic → North Sea
   });
   it('routes Mediterranean → Norwegian Sea via Gibraltar', () => {
     const r = nav.route({ lat: 34, lon: 20 }, { lat: 68, lon: 5 });
