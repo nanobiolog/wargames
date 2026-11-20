@@ -1,5 +1,6 @@
 import {
-  GameClient, parseCommandLine, describeCommand, GAME_COMMAND_HELP, DEFCON_NAMES, KIND_LABEL, PALETTE,
+  GameClient, parseCommandLine, describeCommand, DEFCON_NAMES, KIND_LABEL, PALETTE, suggest, helpLines,
+  type Suggestion,
   distKm, fmtLatLon, ballisticPos, normLon, SPEED_STEPS,
   type GameEvent, type Side, type Unit, type Contact, type PlanProposal, type Snapshot, type Command, type Focus,
 } from '@coldlaunch/shared';
@@ -32,25 +33,12 @@ const EVENT_COLOR: Record<GameEvent['kind'], RGB> = {
 
 const DEFCON_COLOR: Record<number, RGB> = { 5: COL.green, 4: hex('#5fd7ff'), 3: COL.yellow, 2: COL.orange, 1: COL.red };
 
-const LOCAL_HELP: [string, string][] = [
-  ['zoom <place|in|out|N>', 'zoom map (mouse wheel / + - also work)'],
-  ['goto <place>', 'center map on a place, unit or lat,lon'],
-  ['world | polar | flat', 'reset view / north-polar / flat projection'],
-  ['layer <name> [on|off]', `toggle: ${LAYER_NAMES.join(' ')}`],
-  ['select <unit> | track <unit>', 'select / follow a unit (click also selects)'],
-  ['list [kind|enemy]', 'list your units (silo airbase bomber ssbn ssn carrier ...)'],
-  ['ask <anything>', 'natural-language orders via your AI advisor'],
-  ['focus', 'fly the GUI wall display to the current view'],
-  ['gui | web [preset]', 'open the wall display (Electron / browser tab, e.g. web conus)'],
-  ['link | keys', 'show session link / how to add AI API keys'],
-  ['save <name> | load <name> | new', 'save / load / restart'],
-  ['mouse on|off, bell on|off, sync on|off', 'terminal options'],
-  ['quit', 'exit'],
-];
 
 export interface TuiOptions {
   openGui?: () => void;
   openWeb?: (preset?: string) => void;
+  /** join links to show for the `link` command (label, url) */
+  links?: () => [string, string][];
   onQuit?: () => void;
 }
 
@@ -175,10 +163,17 @@ export class TuiApp {
     const r = q.trim().toLowerCase();
     const ll = r.match(/^(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)$/);
     if (ll) return { lat: +ll[1], lon: +ll[2], name: q };
+    const w = this.client.world;
+    // exact matches win (unit id, city, sea area), then partial ones
+    const byId = this.allUnits().find((x) => x.id === r);
+    if (byId) return { lat: byId.lat, lon: byId.lon, name: byId.name };
+    const cityX = w?.cities.find((c) => c.name.toLowerCase() === r);
+    if (cityX) return { lat: cityX.lat, lon: cityX.lon, name: cityX.name };
+    const seaX = w?.seaAreas.find((a) => a.name.toLowerCase() === r);
+    if (seaX) return { lat: seaX.lat, lon: seaX.lon, name: seaX.name };
     const u = this.findUnit(r);
     if (u) return { lat: u.lat, lon: u.lon, name: u.name };
-    const w = this.client.world;
-    const city = w?.cities.find((c) => c.name.toLowerCase() === r) ?? w?.cities.find((c) => c.name.toLowerCase().startsWith(r));
+    const city = w?.cities.find((c) => c.name.toLowerCase().startsWith(r));
     if (city) return { lat: city.lat, lon: city.lon, name: city.name };
     const sea = w?.seaAreas.find((a) => a.name.toLowerCase().includes(r));
     if (sea) return { lat: sea.lat, lon: sea.lon, name: sea.name };
@@ -209,7 +204,11 @@ export class TuiApp {
     const keys: Record<string, () => void> = {
       '\x1b[A': () => (this.input ? this.histNav(1) : this.map.panCells(0, -Math.ceil(this.mapRect.h / 6))),
       '\x1b[B': () => (this.input ? this.histNav(-1) : this.map.panCells(0, Math.ceil(this.mapRect.h / 6))),
-      '\x1b[C': () => (this.input ? (this.cursor = Math.min(this.input.length, this.cursor + 1)) : this.map.panCells(Math.ceil(this.mapRect.w / 8), 0)),
+      '\x1b[C': () => {
+        if (!this.input) return this.map.panCells(Math.ceil(this.mapRect.w / 8), 0);
+        if (this.cursor >= this.input.length) return this.acceptGhost();
+        this.cursor = Math.min(this.input.length, this.cursor + 1);
+      },
       '\x1b[D': () => (this.input ? (this.cursor = Math.max(0, this.cursor - 1)) : this.map.panCells(-Math.ceil(this.mapRect.w / 8), 0)),
       '\x1b[5~': () => (this.logScroll += 5),
       '\x1b[6~': () => (this.logScroll = Math.max(0, this.logScroll - 5)),
@@ -295,7 +294,37 @@ export class TuiApp {
     this.cursor = this.input.length;
   }
 
+  private places_: string[] | null = null;
+  /** Type-ahead state for the current line (only when the cursor is at the end). */
+  private suggestion(): Suggestion {
+    if (this.plan) return { ghost: '', candidates: [], hint: `advisor plan waiting — y to execute, anything else discards` };
+    if (this.cursor < this.input.length) return { ghost: '', candidates: [], hint: '' };
+    this.places_ ??= this.places.filter((p) => p[3] <= 6).map((p) => p[0].toLowerCase());
+    return suggest(this.input, {
+      snap: this.client.snap, world: this.client.world, role: this.side(), where: 'tui',
+      places: this.places_, layers: [...LAYER_NAMES], presets: ['wall', 'world', 'conus', 'europe', 'eurasia', 'alaska', 'pacific', 'atlantic', 'polar', 'missiles', 'stats', 'log'],
+    });
+  }
+
+  private acceptGhost(): boolean {
+    const g = this.suggestion().ghost;
+    if (!g) return false;
+    this.input += g;
+    this.cursor = this.input.length;
+    return true;
+  }
+
   private complete() {
+    if (this.acceptGhost()) return;
+    const sug = this.suggestion();
+    if (sug.candidates.length > 1) {
+      this.sys(sug.candidates.join('  '), COL.dim);
+      return;
+    }
+    this.legacyComplete();
+  }
+
+  private legacyComplete() {
     const before = this.input.slice(0, this.cursor);
     const m = before.match(/(\S*)$/);
     const word = (m?.[1] ?? '').toLowerCase();
@@ -366,12 +395,11 @@ export class TuiApp {
     switch (v) {
       case 'help':
       case '?': {
-        this.sys('── ORDERS ─────────────────────────────', COL.title);
-        for (const [a, b] of GAME_COMMAND_HELP) this.sys(`${a.padEnd(36)} ${b}`, COL.text);
-        this.sys('── CONSOLE ────────────────────────────', COL.title);
-        for (const [a, b] of LOCAL_HELP) this.sys(`${a.padEnd(36)} ${b}`, COL.text);
-        this.sys('KEYS: arrows pan (empty line) · +/- zoom · [ ] time · space pause · PgUp/PgDn log · Tab complete · Esc clear', COL.dim);
-        this.sys('ANYTHING ELSE IS SENT TO YOUR AI ADVISOR, e.g. "move the midway group into the sea of japan"', COL.dim);
+        for (const l of helpLines('tui', arg || undefined)) this.sys(l, l.startsWith('──') ? COL.title : COL.text);
+        if (!arg) {
+          this.sys('KEYS: arrows pan (empty line) · +/- zoom · [ ] time · space pause · PgUp/PgDn log · Esc clear', COL.dim);
+          this.sys('TYPE-AHEAD: grey text is a suggestion — → or Tab accepts it; Tab twice lists choices.', COL.dim);
+        }
         return;
       }
       case 'zoom': {
@@ -453,8 +481,12 @@ export class TuiApp {
         this.sys('It asks for GEMINI and/or ANTHROPIC keys (hidden input) and saves them to ~/.coldlaunch/config.json.', COL.dim);
         this.sys('Then restart with e.g.  npm start -- --opponent gemini   or   npm start -- --opponent claude', COL.dim);
         return;
-      case 'link':
-        return this.sys(`SESSION LINK: ${this.client.link}`, COL.green);
+      case 'link': {
+        const ls = this.opts.links?.() ?? [['session', this.client.link ?? '']];
+        for (const [label, url] of ls) this.sys(`${label.padEnd(22)} ${url}`, COL.green);
+        this.sys('Anyone with these links can join; keep them on trusted machines. Browser links: add &preset=conus|missiles|stats|…', COL.dim);
+        return;
+      }
       case 'save':
         if (!/^[\w-]{1,40}$/.test(arg)) return this.sys('usage: save <name>', COL.red);
         return this.client.save(arg);
@@ -562,7 +594,7 @@ export class TuiApp {
     const sideW = wide ? Math.min(38, Math.floor(W * 0.26)) : 0;
     const logH = H >= 40 ? 10 : H >= 28 ? 7 : 4;
     const mapW = W - sideW;
-    const mapH = H - 1 - logH - 1;
+    const mapH = H - 1 - logH - 2;
     this.mapRect = { x: 0, y: 1, w: mapW, h: mapH };
 
     this.renderStatus(snap);
@@ -702,6 +734,12 @@ export class TuiApp {
 
   private renderInput(y: number, w: number) {
     const scr = this.scr;
+    const sug = this.suggestion();
+    // hint row (syntax of the command being typed, or next-order ideas)
+    scr.fill(0, y - 1, w, 1, [3, 10, 22]);
+    let hint = sug.hint;
+    if (this.input && sug.candidates.length > 1) hint += `   ▸ ${sug.candidates.slice(0, 8).join('  ')}`;
+    scr.put(1, y - 1, hint.slice(0, w - 2), this.plan ? COL.yellow : dim(COL.cyan, 0.9), [3, 10, 22]);
     const prompt = this.plan ? 'EXECUTE? [y/N] ' : `${this.side() === 'USSR' ? 'СТАВКА' : 'NCA'}> `;
     const color = this.plan ? COL.yellow : COL.green;
     scr.fill(0, y, w, 1, [0, 0, 0]);
@@ -710,7 +748,13 @@ export class TuiApp {
     const off = Math.max(0, this.cursor - avail);
     scr.put(prompt.length, y, this.input.slice(off, off + avail), COL.white);
     scr.cursor = { x: prompt.length + this.cursor - off, y };
-    if (!this.input && !this.plan) scr.put(prompt.length, y, 'type orders or "help" · natural language goes to the AI advisor', dim(COL.text, 0.35));
+    const gx = prompt.length + this.input.length - off;
+    if (sug.ghost && gx < w) {
+      if (!this.input) scr.put(gx, y, `${sug.ghost}   ← Tab`.slice(0, w - gx - 1), dim(COL.text, 0.38));
+      else scr.put(gx, y, sug.ghost.slice(0, w - gx - 1), dim(COL.text, 0.42));
+    } else if (!this.input && !this.plan) {
+      scr.put(prompt.length, y, 'type orders or "help" · natural language goes to the AI advisor', dim(COL.text, 0.35));
+    }
   }
 }
 

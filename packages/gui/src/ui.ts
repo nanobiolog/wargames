@@ -16,6 +16,7 @@ interface UiHost {
   saveFx(): void;
   connect(link: string): void;
   currentLink(): string | null;
+  toggleConsole(): void;
 }
 
 declare global {
@@ -81,6 +82,7 @@ export class Ui {
       return b;
     };
     btn(`VIEW: ${PRESET_LABEL[this.host.getPreset()] ?? this.host.getPreset()}`, () => this.toggle('presets'), 'Choose what this window shows (1-9)');
+    btn('CONSOLE', () => this.host.toggleConsole(), '` — type orders right here');
     btn('LAYERS', () => this.toggle('layers'), 'L');
     btn('CRT', () => this.toggle('crt'), 'C');
     btn('NEW WINDOW', () => this.newWindow(this.host.getPreset() === 'wall' ? 'world' : 'wall'), 'Open another display window');
@@ -142,6 +144,7 @@ export class Ui {
     this.panels.help.innerHTML = `<div class="ph">WALL DISPLAY</div>
       <p>Mouse wheel: zoom the panel under the cursor · drag: pan · double-click: maximise panel · Esc: restore</p>
       <p>Click a unit to select it (your terminal follows). Right-click for orders. Space: pause · R: reset views · L: layers · C: CRT</p>
+      <p><b>\`</b> opens the built-in command console — the same orders as the terminal, with type-ahead (Tab / → accepts).</p>
       <p>Keys 1-9 / 0 switch this window's view: ${PRESET_NAMES.map((p, i) => `${(i + 1) % 10}=${PRESET_LABEL[p]}`).join(', ')}</p>
       <p>The terminal console stays the primary command line — type <b>help</b> there.</p>`;
   }

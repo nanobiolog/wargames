@@ -4,6 +4,7 @@ import { GeoStore, bucketize } from './geo.ts';
 import { buildWorld, LAYER_LIST, type LayerKey, type SceneState } from './scene.ts';
 import { drawPanel, layoutFor, panelAt, zoomPanel, panPanel, flyTo, nearestPick, PRESET_NAMES, type Panel, type WallCtx } from './wall.ts';
 import { Ui } from './ui.ts';
+import { Console } from './console.ts';
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('gl') as HTMLCanvasElement;
@@ -100,6 +101,7 @@ async function connect(link: string) {
 
 client.on('welcome', () => {
   st.role = (client.role ?? 'USA') as SceneState['role'];
+  konsole.setRole(st.role);
   events.length = 0;
   st.trails.clear();
   ui.refresh();
@@ -123,7 +125,7 @@ client.on('snap', (s: Snapshot) => {
 client.on('events', (evs: GameEvent[]) => {
   events.push(...evs);
   if (events.length > 400) events.splice(0, events.length - 400);
-  for (const e of evs) ui.onEvent(e);
+  for (const e of evs) { ui.onEvent(e); konsole.onEvent(e); }
 });
 client.on('focus', ({ focus }: { focus: Focus }) => applyFocus(focus));
 client.on('plan', (p: PlanProposal | null) => (st.plan = p));
@@ -226,6 +228,7 @@ function fromXf(p: Panel, x: number, y: number): LatLon {
 window.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement).tagName === 'INPUT') return;
   if (e.key === 'Escape') { ui.cancel(); maximized = null; relayout(); }
+  else if (e.key === '`') { e.preventDefault(); konsole.toggle(); }
   else if (e.key === 'l' || e.key === 'L') ui.toggle('layers');
   else if (e.key === 'c' || e.key === 'C') ui.toggle('crt');
   else if (e.key === 'r' || e.key === 'R') { for (const p of panels) if (p.home) p.view = { ...p.home }; }
@@ -246,7 +249,41 @@ const ui = new Ui(document.getElementById('ui')!, {
   saveFx: () => store.set('fx2', fx),
   connect: (link) => void connect(link),
   currentLink: () => client.link ?? null,
+  toggleConsole: () => konsole.toggle(),
 });
+
+function mainMap(): Panel | undefined {
+  return panels.find((p) => p.focus) ?? panels.find((p) => p.kind === 'map');
+}
+
+function webLinks(): [string, string][] {
+  const p = client.link ? parseLink(client.link) : null;
+  const base = location.protocol.startsWith('http') ? location.origin : p ? `http://${p.host}:${p.port}` : '';
+  const token = params.get('token') ?? p?.token;
+  if (!base || !token) return [];
+  const enemy = st.role === 'USA' ? 'USSR' : 'USA';
+  return [
+    ['you (this side)', `${base}/?token=${token}&role=${st.role}`],
+    ['spectator wall', `${base}/?token=${token}&role=SPECTATOR&preset=wall`],
+    [`other side (${enemy})`, `${base}/?token=${token}&role=${enemy}`],
+    ['missile board', `${base}/?token=${token}&role=${st.role}&preset=missiles`],
+    ['terminal (other PC)', `npm start -- --join ${client.link ?? ''}`],
+  ];
+}
+
+const konsole = new Console(document.getElementById('ui')!, {
+  client, st,
+  places: () => geo.places,
+  flyTo: (lat, lon, zoom, label) => { const p = mainMap(); if (p) flyTo(p, lat, lon, zoom ?? p.view?.zoom, p.focus ? label : undefined); },
+  zoomBy: (f) => { const p = mainMap(); if (p?.xf) zoomPanel(p, f, p.xf.w / 2, p.xf.h / 2); },
+  world: () => { const p = mainMap(); if (p) flyTo(p, 18, 10, 1, p.focus ? 'GLOBAL SITUATION' : undefined); },
+  setPreset,
+  newWindow: (p) => ui.newWindow(p),
+  saveLayers: () => store.set('layers', st.layers),
+  webLinks,
+  onSelect: () => ui.updateInfo(),
+});
+if (params.get('console') === '1') konsole.toggle(true);
 
 // ------------------------------------------------------------------ frame loop
 

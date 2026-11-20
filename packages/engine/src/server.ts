@@ -73,16 +73,20 @@ export class GameServer {
   }
 
   /** Browser URL for the wall display (served by this server). */
-  webLink(role?: Role, preset?: string) {
-    const host = this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
+  /** Host name other machines should use (set to the LAN IP when listening on 0.0.0.0). */
+  publicHost?: string;
+
+  webLink(role?: Role, preset?: string, forLan = false) {
+    const host = forLan && this.publicHost ? this.publicHost : this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
     const q = new URLSearchParams({ token: this.token });
     if (role) q.set('role', role);
     if (preset) q.set('preset', preset);
     return `http://${host}:${this.port}/?${q}`;
   }
 
-  link(role?: Role) {
-    return makeLink(this.host === '0.0.0.0' ? '127.0.0.1' : this.host, this.port, this.token, role);
+  link(role?: Role, forLan = false) {
+    const host = forLan && this.publicHost ? this.publicHost : this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
+    return makeLink(host, this.port, this.token, role);
   }
 
   async start() {

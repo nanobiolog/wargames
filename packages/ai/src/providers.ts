@@ -28,6 +28,9 @@ export interface AiConfig {
   advisor?: string;
   personality?: number;
   display?: 'electron' | 'browser' | 'none';
+  /** model used when a spec names only the provider ("gemini", "claude") */
+  geminiModel?: string;
+  claudeModel?: string;
 }
 
 /** ~/.coldlaunch/config.json (keys never leave this process except to their own provider). */
@@ -51,12 +54,26 @@ const PRICES: Record<string, [number, number]> = {
   'claude-haiku-5-5': [0.1, 0.5],
   'claude-fable-5-2': [8, 40],
   'gemini-4-hydrogen': [1.5, 7.5],
+  'gemini-3.1-flash-lite': [0.25, 1.5],
+  'gemini-3.5-flash': [1.5, 9], // approximate — check ai.google.dev/pricing
 };
 
+/** Defaults when a spec names only the provider — the lowest-cost models, since a game makes many calls. */
 export const DEFAULT_MODELS = {
-  claude: 'claude-opus-5-5',
-  gemini: 'gemini-4-hydrogen',
+  claude: 'claude-haiku-5-5',
+  gemini: 'gemini-3.1-flash-lite',
 };
+
+/** Numbered choices offered by `npm run setup` / `npm run models` (cheapest first per provider). */
+export const MODEL_MENU: { spec: string; label: string; price: string }[] = [
+  { spec: 'rules', label: 'Built-in doctrine AI (offline)', price: 'free' },
+  { spec: 'gemini:gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite — cheapest Gemini, fast', price: '$0.25 / $1.50' },
+  { spec: 'gemini:gemini-4-hydrogen', label: 'Gemini 4 Hydrogen — strongest Gemini listed', price: '$1.50 / $7.50' },
+  { spec: 'gemini:gemini-3.5-flash', label: 'Gemini 3.5 Flash — general purpose', price: '~$1.50 / $9 (unconfirmed)' },
+  { spec: 'claude:claude-haiku-5-5', label: 'Claude Haiku 5.5 — cheapest overall, fast', price: '$0.10 / $0.50' },
+  { spec: 'claude:claude-sonnet-5-5', label: 'Claude Sonnet 5.5 — balanced', price: '$2 / $10' },
+  { spec: 'claude:claude-opus-5-5', label: 'Claude Opus 5.5 — strongest strategist', price: '$4 / $20' },
+];
 
 // Models that accept the server-side refusal fallback ("default" routing).
 const FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-2', 'claude-fable-5-1']);
@@ -147,11 +164,22 @@ class OpenAiCompatProvider implements LlmProvider {
   }
 }
 
+/** The model the user picked for a provider: explicit per-provider setting, else from the saved opponent/advisor spec. */
+function savedModel(cfg: AiConfig, provider: 'gemini' | 'claude'): string | undefined {
+  const explicit = provider === 'gemini' ? cfg.geminiModel : cfg.claudeModel;
+  if (explicit) return explicit;
+  for (const spec of [cfg.opponent, cfg.advisor]) {
+    const m = spec?.match(/^(\w+):(.+)$/);
+    if (m && (m[1] === provider || (provider === 'claude' && m[1] === 'anthropic') || (provider === 'gemini' && m[1] === 'google'))) return m[2];
+  }
+  return undefined;
+}
+
 /**
  * Provider spec:
  *   rules                      built-in doctrine AI (no key)
- *   claude[:model]             default claude-opus-5-5
- *   gemini[:model]             default gemini-4-hydrogen
+ *   claude[:model]             default: your saved Claude model, else claude-haiku-5-5
+ *   gemini[:model]             default: your saved Gemini model, else gemini-3.1-flash-lite
  *   openai:model@http://host/v1
  */
 export function makeProvider(spec: string, cfg: AiConfig = loadConfig(), effort: 'low' | 'medium' | 'high' = 'low'): LlmProvider | 'rules' {
@@ -162,11 +190,11 @@ export function makeProvider(spec: string, cfg: AiConfig = loadConfig(), effort:
   switch (kind.toLowerCase()) {
     case 'claude':
     case 'anthropic':
-      return new ClaudeProvider(model || DEFAULT_MODELS.claude, cfg.anthropicApiKey, effort);
+      return new ClaudeProvider(model || savedModel(cfg, 'claude') || DEFAULT_MODELS.claude, cfg.anthropicApiKey, effort);
     case 'gemini':
     case 'google': {
       if (!cfg.geminiApiKey) throw new Error('GEMINI_API_KEY is not set (env or ~/.coldlaunch/config.json)');
-      return new GeminiProvider(model || DEFAULT_MODELS.gemini, cfg.geminiApiKey);
+      return new GeminiProvider(model || savedModel(cfg, 'gemini') || DEFAULT_MODELS.gemini, cfg.geminiApiKey);
     }
     case 'openai': {
       const at = model.lastIndexOf('@');

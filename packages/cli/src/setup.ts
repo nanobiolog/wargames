@@ -4,13 +4,14 @@
  *
  *   npm run setup            interactive (keys are typed with hidden input)
  *   npm run setup -- --show  print the current settings (keys masked)
+ *   npm run models           pick opponent / advisor models from a numbered list
  *   npm run setup -- --clear-keys
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import type { AiConfig } from '@coldlaunch/ai';
+import { MODEL_MENU, type AiConfig } from '@coldlaunch/ai';
 
 const DIR = join(homedir(), '.coldlaunch');
 const FILE = join(DIR, 'config.json');
@@ -37,7 +38,8 @@ function show(cfg: AiConfig) {
   console.log(`  Anthropic key ${mask(cfg.anthropicApiKey)}${envA ? '   (ANTHROPIC_API_KEY env var set — it takes priority)' : ''}`);
   console.log(`  OpenAI-compat ${mask(cfg.openaiApiKey)}`);
   console.log(`  opponent      ${cfg.opponent ?? 'rules (default)'}`);
-  console.log(`  advisor       ${cfg.advisor ?? 'auto (same as opponent, or whichever key is set)'}`);
+  console.log(`  advisor       ${cfg.advisor ?? 'same as opponent (or whichever key is set)'}`);
+  console.log(`  bare "gemini" → ${cfg.geminiModel ?? 'gemini-3.1-flash-lite'},  bare "claude" → ${cfg.claudeModel ?? 'claude-haiku-5-5'}`);
   console.log(`  personality   ${cfg.personality ?? 0.5}`);
   console.log(`  display       ${cfg.display ?? 'electron (default)'}\n`);
 }
@@ -93,9 +95,51 @@ async function ask(q: string, def?: string): Promise<string> {
   return a || def || '';
 }
 
+/** Numbered model menu. Accepts a number, a full spec (gemini:model), or Enter for the default. */
+async function pickModel(title: string, current: string | undefined, cfg: AiConfig, allowSame = false): Promise<string | undefined> {
+  const hasG = !!(cfg.geminiApiKey ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY);
+  const hasA = !!(cfg.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY);
+  console.log(`\n  ${title}   (price per 1M tokens: input / output)`);
+  if (allowSame) console.log(`   0) same as opponent`);
+  MODEL_MENU.forEach((m, i) => {
+    const needs = m.spec.startsWith('gemini') && !hasG ? '  [needs Gemini key]' : m.spec.startsWith('claude') && !hasA ? '  [needs Anthropic key or `ant auth login`]' : '';
+    const mark = m.spec === current ? '  ← current' : '';
+    console.log(`   ${i + 1}) ${m.label.padEnd(48)} ${m.price}${needs}${mark}`);
+  });
+  console.log(`   or type any spec, e.g. gemini:<model>, claude:<model>, openai:<model>@http://localhost:11434/v1`);
+  const def = allowSame ? (current ? String(MODEL_MENU.findIndex((m) => m.spec === current) + 1 || current) : '0')
+    : String((MODEL_MENU.findIndex((m) => m.spec === current) + 1) || (hasG ? 2 : hasA ? 5 : 1));
+  const a = (await ask('  Choice', def)).trim();
+  if (allowSame && a === '0') return undefined;
+  const n = parseInt(a, 10);
+  if (/^\d+$/.test(a) && n >= 1 && n <= MODEL_MENU.length) return MODEL_MENU[n - 1].spec;
+  return a || current;
+}
+
+function rememberModel(cfg: AiConfig, spec?: string) {
+  const m = spec?.match(/^(gemini|google|claude|anthropic):(.+)$/);
+  if (!m) return;
+  if (m[1] === 'gemini' || m[1] === 'google') cfg.geminiModel = m[2];
+  else cfg.claudeModel = m[2];
+}
+
+async function chooseModels(cfg: AiConfig) {
+  cfg.opponent = await pickModel('Opponent AI', cfg.opponent ?? undefined, cfg);
+  rememberModel(cfg, cfg.opponent);
+  cfg.advisor = await pickModel('Advisor (turns your plain-English orders into commands)', cfg.advisor, cfg, true);
+  rememberModel(cfg, cfg.advisor);
+}
+
 async function main() {
   const cfg = load();
   if (process.argv.includes('--show')) return show(cfg);
+  if (process.argv.includes('--models')) {
+    await chooseModels(cfg);
+    save(cfg);
+    console.log('\n  Saved ✓');
+    show(cfg);
+    process.exit(0);
+  }
   if (process.argv.includes('--clear-keys')) {
     delete cfg.geminiApiKey; delete cfg.anthropicApiKey; delete cfg.openaiApiKey;
     save(cfg);
@@ -119,9 +163,7 @@ async function main() {
   cfg.geminiApiKey = await upd('Gemini API key', cfg.geminiApiKey);
   cfg.anthropicApiKey = await upd('Anthropic API key', cfg.anthropicApiKey);
 
-  const defOpp = cfg.opponent ?? (cfg.geminiApiKey ? 'gemini:gemini-4-hydrogen' : cfg.anthropicApiKey ? 'claude:claude-opus-5-5' : 'rules');
-  console.log('\n  Opponent: rules | gemini[:model] | claude[:model] | openai:model@http://host/v1');
-  cfg.opponent = await ask('  Default opponent', defOpp);
+  await chooseModels(cfg);
   const p = parseFloat(await ask('  Opponent temperament 0 (dove) … 1 (hawk)', String(cfg.personality ?? 0.5)));
   cfg.personality = Number.isFinite(p) ? Math.max(0, Math.min(1, p)) : 0.5;
   const d = (await ask('  Wall display: electron | browser | none', cfg.display ?? 'electron')).toLowerCase();
@@ -130,7 +172,8 @@ async function main() {
   save(cfg);
   console.log(`\n  Saved ✓`);
   show(cfg);
-  console.log('  Test a key (makes one small, billed API call):  npm run ai:smoke -- --provider gemini');
+  console.log('  Change models later:                             npm run models');
+  console.log('  Test your opponent model (one small, billed call): npm run ai:smoke');
   console.log('  Play:                                            npm start\n');
   process.exit(0);
 }

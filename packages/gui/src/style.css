@@ -68,3 +68,29 @@ button.danger { color: #ff8a80; border-color: #a33; }
 }
 .connect .ph { color: #fff; font-size: 14px; text-shadow: 0 0 8px #4aa8ff; }
 .connect input { width: 100%; margin: 8px 0; padding: 7px; font: inherit; color: #fff; background: #01060f; border: 1px solid #2a6fd0; }
+
+/* ---------------------------------------------------------------- built-in console */
+.console {
+  position: fixed; left: 12px; bottom: calc(5.5vh + 20px); width: min(760px, 52vw); height: 38vh; min-width: 340px; min-height: 180px;
+  display: flex; flex-direction: column; z-index: 6; resize: both; overflow: hidden;
+  background: rgba(1, 6, 15, 0.93); border: 1px solid #2a6fd0; box-shadow: 0 0 22px rgba(40, 120, 255, 0.35);
+  font-size: 12px;
+}
+.console .cbar { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-bottom: 1px solid #10305a; color: #fff; text-shadow: 0 0 8px #4aa8ff; }
+.console .cbar span { flex: 1; }
+.console button.small { padding: 1px 7px; }
+.console .clog { flex: 1; overflow-y: auto; padding: 6px 8px; white-space: pre-wrap; line-height: 1.35; }
+.console .chint { padding: 3px 8px; color: #5fe3ff; background: rgba(3, 12, 26, 0.9); border-top: 1px solid #10305a; min-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.console .cchips { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 8px 3px; min-height: 4px; }
+.console .chip { padding: 0 6px; font-size: 11px; text-transform: none; }
+.console .cline { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-top: 1px solid #10305a; }
+.console .cprompt { color: #5cff8a; font-weight: bold; }
+.console .cinwrap { position: relative; flex: 1; }
+.console .cin, .console .cghost { font: inherit; letter-spacing: inherit; padding: 2px 0; width: 100%; white-space: pre; }
+.console .cin { position: relative; z-index: 2; background: transparent; border: none; outline: none; color: #fff; caret-color: #5cff8a; }
+.console .cghost { position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
+.console .cghost-pre { color: transparent; }
+.console .cghost-txt { color: rgba(168, 220, 255, 0.38); }
+.c-red { color: #ff6a5f; } .c-yellow { color: #ffd23f; } .c-green { color: #7dffb0; } .c-white { color: #fff; }
+.c-orange { color: #ff9a3c; } .c-magenta { color: #ff8ae0; } .c-purple { color: #c08cff; } .c-cyan { color: #5fe3ff; }
+.c-dim { color: #6f8fb0; } .c-title { color: #fff; margin-top: 4px; } .c-input { color: #fff; font-weight: bold; }

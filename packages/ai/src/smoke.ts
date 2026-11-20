@@ -1,13 +1,14 @@
 // Live smoke test for an AI provider: npm run ai:smoke -- --provider gemini:gemini-4-hydrogen
 import { Game } from '@coldlaunch/engine';
-import { makeProvider, GAME_TOOLS, situationReport, toolCallToCommand } from './index.ts';
+import { makeProvider, loadConfig, GAME_TOOLS, situationReport, toolCallToCommand } from './index.ts';
 import { opponentSystemPrompt } from './situation.ts';
 
 const arg = (k: string) => {
   const i = process.argv.indexOf(k);
   return i >= 0 ? process.argv[i + 1] : undefined;
 };
-const spec = arg('--provider') ?? 'claude';
+// default: the opponent you saved with `npm run setup`
+const spec = arg('--provider') ?? loadConfig().opponent ?? 'gemini';
 const p = makeProvider(spec);
 if (p === 'rules') {
   console.log('rules provider needs no smoke test');

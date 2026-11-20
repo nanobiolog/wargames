@@ -13,6 +13,7 @@
   "scripts": {
     "start": "tsx packages/cli/src/main.ts",
     "setup": "tsx packages/cli/src/setup.ts",
+    "models": "tsx packages/cli/src/setup.ts --models",
     "web": "tsx packages/cli/src/main.ts --display browser",
     "server": "tsx packages/cli/src/main.ts --no-tui",
     "geo": "tsx packages/data/scripts/build-geo.ts",
@@ -22,7 +23,8 @@
     "mcp": "tsx packages/mcp/src/index.ts",
     "ai:smoke": "tsx packages/ai/src/smoke.ts",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "docs": "tsx packages/cli/src/gen-docs.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

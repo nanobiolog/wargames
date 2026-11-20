@@ -10,7 +10,7 @@
 import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { homedir } from 'node:os';
+import { homedir, networkInterfaces } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_PORT, GameClient, enemyOf, parseLink, type Side, type Role } from '@coldlaunch/shared';
@@ -33,8 +33,9 @@ if (flag('--help') || flag('-h')) {
   npm start -- [options]
 
   --side USA|USSR          side you command (default USA)
-  --opponent <spec>        rules | claude[:model] | gemini[:model] | openai:model@baseURL
-                           e.g. gemini:gemini-4-hydrogen, claude:claude-opus-5-5
+  --opponent <spec>        rules | human | claude[:model] | gemini[:model] | openai:model@baseURL
+                           e.g. gemini:gemini-3.1-flash-lite, claude:claude-haiku-5-5
+                           human = a second person plays the other side (see the "link" command)
   --advisor <spec>|none    AI that turns natural-language orders into commands
   --personality 0..1       opponent temperament (0 dove … 1 hawk, default 0.5)
   --ai-vs-ai               both sides played by AI, you watch as spectator
@@ -80,6 +81,13 @@ function openGui(link: string, allMonitors = false) {
   return true;
 }
 
+function lanAddress(): string | undefined {
+  for (const list of Object.values(networkInterfaces())) {
+    for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal) return a.address;
+  }
+  return undefined;
+}
+
 function openBrowser(url: string) {
   const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
   const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
@@ -103,9 +111,12 @@ async function main() {
   const personality = Math.max(0, Math.min(1, parseFloat(opt('--personality', String(cfg.personality ?? 0.5))!)));
   const oppSpec = opt('--opponent') ?? process.env.COLDLAUNCH_OPPONENT ?? cfg.opponent ?? 'rules';
   let advSpec = opt('--advisor') ?? process.env.COLDLAUNCH_ADVISOR ?? cfg.advisor;
-  if (!advSpec) advSpec = oppSpec !== 'rules' ? oppSpec : cfg.geminiApiKey ? 'gemini' : cfg.anthropicApiKey ? 'claude' : 'none';
+  const oppIsLlm = !['rules', 'human', 'none', 'builtin'].includes(oppSpec);
+  if (!advSpec) advSpec = oppIsLlm ? oppSpec : cfg.geminiApiKey ? 'gemini' : cfg.anthropicApiKey ? 'claude' : 'none';
 
-  const opponent = makeProvider(oppSpec, cfg, 'low');
+  // "human" = no AI: the other side is played by a second person (another terminal / PC)
+  const humanOpponent = oppSpec === 'human' || oppSpec === 'none';
+  const opponent = humanOpponent ? 'rules' : makeProvider(oppSpec, cfg, 'low');
   const advisorLlm = advSpec === 'none' ? null : makeProvider(advSpec, cfg, 'low');
   const port = parseInt(opt('--port', String(DEFAULT_PORT))!, 10);
   const seed = opt('--seed') ? parseInt(opt('--seed')!, 10) : undefined;
@@ -122,9 +133,10 @@ async function main() {
 
   const ais: AiOpponent[] = [];
   const enemy = enemyOf(side);
-  ais.push(new AiOpponent(server, enemy, opponent, { personality, log }).attach());
+  if (!humanOpponent) ais.push(new AiOpponent(server, enemy, opponent, { personality, log }).attach());
   if (aiVsAi) ais.push(new AiOpponent(server, side, opponent, { personality: 1 - personality * 0.6, log }).attach());
-  server.aiLabel = ais.map((a) => `${a.side}=${a.label}`).join(' ');
+  server.aiLabel = humanOpponent ? `${enemy}=human` : ais.map((a) => `${a.side}=${a.label}`).join(' ');
+  if (server.host === '0.0.0.0') server.publicHost = lanAddress();
 
   const role: Role = aiVsAi ? 'SPECTATOR' : side;
   const link = server.link(role);
@@ -146,13 +158,31 @@ async function main() {
   };
   if (display !== 'none') openWall();
 
+  function joinLinks(): [string, string][] {
+    const lan = !!server.publicHost;
+    const out: [string, string][] = [
+      ['your browser display', server.webLink(role)],
+      ['spectator wall (any PC)', server.webLink('SPECTATOR', 'wall', lan)],
+      ['missile board (any PC)', server.webLink(role, 'missiles', lan)],
+      [`${enemy} player browser`, server.webLink(enemy, 'wall', lan)],
+      [`${enemy} player terminal`, `npm start -- --join "${server.link(enemy, lan)}"`],
+      ['your terminal elsewhere', `npm start -- --join "${server.link(role, lan)}"`],
+    ];
+    if (!lan) out.push(['other PCs', 'restart with --host 0.0.0.0 to allow LAN connections']);
+    return out;
+  }
+  if (useTui) log(`join links:\n${joinLinks().map(([a, b]) => `  ${a.padEnd(26)} ${b}`).join('\n')}`);
+
   if (!useTui) {
-    console.log(`\n  STRATCOM // COLD LAUNCH — server running\n  session link : ${link}\n  browser      : ${web}\n  presets      : add &preset=conus|europe|missiles|stats|world|polar|... per monitor\n  terminal     : npm start -- --join ${link}\n`);
+    console.log(`\n  STRATCOM // COLD LAUNCH — server running (opponent: ${server.aiLabel})\n`);
+    for (const [a, b] of joinLinks()) console.log(`  ${a.padEnd(26)} ${b}`);
+    console.log('\n  Add &preset=conus|europe|missiles|stats|world|polar|… to any browser link — one per monitor.\n');
     return;
   }
   const client = new GameClient('tui');
   await client.connect(link, role);
   const app = new TuiApp(client, {
+    links: () => joinLinks(),
     openGui: () => openWall(),
     openWeb: (preset) => openBrowser(server.webLink(role, preset)),
     onQuit: () => server.stop(),
