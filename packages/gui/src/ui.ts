@@ -79,10 +79,10 @@ export class Ui {
   refresh() {
     const t = this.toolbar;
     t.innerHTML = '';
-    const btn = (label: string, fn: () => void, title = '') => {
-      const b = h('button', '', label);
+    const btn = (label: string, fn: () => void, title = '', cls = '') => {
+      const b = h('button', cls, label);
       b.title = title;
-      b.onclick = (e) => { e.stopPropagation(); fn(); };
+      b.onclick = (e) => { e.stopPropagation(); t.classList.remove('open'); fn(); };
       t.append(b);
       return b;
     };
@@ -92,10 +92,10 @@ export class Ui {
     btn('CONSOLE', () => this.host.toggleConsole(), '` — type orders right here');
     btn('LAYERS', () => this.toggle('layers'), 'L');
     btn('CRT', () => this.toggle('crt'), 'C');
-    btn('NEW WINDOW', () => this.newWindow(this.host.getPreset() === 'wall' ? 'world' : 'wall'), 'Open another display window');
-    btn('ALL MONITORS', () => void this.allMonitors(), 'One preset per connected monitor');
+    btn('NEW WINDOW', () => this.newWindow(this.host.getPreset() === 'wall' ? 'world' : 'wall'), 'Open another display window', 'desk');
+    btn('ALL MONITORS', () => void this.allMonitors(), 'One preset per connected monitor', 'desk');
     btn(this.sound ? 'SOUND ON' : 'SOUND OFF', () => { this.sound = !this.sound; this.refresh(); });
-    btn('SETTINGS', () => this.host.openSettings(), 'Graphics, callsign, AI keys');
+    btn('SETTINGS', () => this.host.openSettings(), 'Graphics, callsign, AI keys, invites', 'setbtn');
     btn('?', () => this.toggle('help'));
     this.buildLayers();
     this.buildCrt();

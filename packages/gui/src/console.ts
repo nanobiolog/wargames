@@ -74,6 +74,13 @@ export class Console {
     this.input.addEventListener('keydown', (e) => this.onKey(e));
     this.input.addEventListener('click', () => this.refresh());
     this.print('Same orders as the terminal. Grey text is a suggestion — Tab or → accepts. Type help, or plain English for your advisor.', 'c-dim');
+    // a different session (another match, a restart): start the log afresh
+    let session = '';
+    host.client.on('welcome', () => {
+      const id = `${host.client.match?.code ?? host.client.link ?? ''}`;
+      if (session && id !== session) this.logEl.textContent = '';
+      session = id;
+    });
   }
 
   get open() {

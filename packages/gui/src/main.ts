@@ -333,6 +333,7 @@ hud = new PhoneHud(document.getElementById('ui')!, {
   client, getMode: () => phoneMode, setMode: setPhoneMode,
   menu: () => { document.querySelector('.toolbar')?.classList.toggle('open'); },
   share: () => void ui.openShare(),
+  onResize: () => { if (preset === 'phone') relayout(); },
 });
 relayout();
 

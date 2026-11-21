@@ -111,7 +111,14 @@ button.danger { color: #ff8a80; border-color: #a33; }
 /* ---------------------------------------------------------------- phone layout */
 .phonehud { display: none; }
 body.phone .toolbar { display: none; }
-body.phone .toolbar.open { display: flex; flex-wrap: wrap; top: 54px; left: 6px; right: 6px; }
+/* ☰ menu on phones: a sheet of large buttons just under the header, above everything else */
+body.phone .toolbar.open {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; opacity: 1 !important;
+  top: calc(var(--hud-h, 50px) + 4px); left: 6px; right: 6px; z-index: 9; padding: 8px;
+  background: rgba(2, 8, 20, 0.97); border: 1px solid #2a6fd0; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
+}
+body.phone .toolbar.open button { min-height: 46px; white-space: normal; line-height: 1.2; font-size: 12px; padding: 6px 4px; overflow-wrap: anywhere; }
+body.phone .toolbar .desk { display: none; }
 body.phone .phonehud {
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; position: fixed; top: 0; left: 0; right: 0; z-index: 7;
   padding: 6px 8px calc(6px + env(safe-area-inset-top, 0px)) 8px; padding-top: max(6px, env(safe-area-inset-top));
@@ -234,3 +241,48 @@ button.small { padding: 2px 7px; font-size: 11px; }
 .matchbar > * { order: 2; flex-shrink: 0; }
 .matchbar .code { order: 0; }
 .matchbar .invitebtn { order: 1; }
+
+/* ---------------------------------------------------------------- invite badge (no popups over the game) */
+body.has-invites .menubtn, body.has-invites .toolbar .setbtn { position: relative; }
+body.has-invites .menubtn::after, body.has-invites .toolbar .setbtn::after {
+  content: var(--inv); position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 8px;
+  background: #5cff8a; color: #001a08; font-size: 10px; line-height: 16px; text-align: center; text-shadow: none; font-weight: bold;
+}
+.settings .invtab { color: #b8ffd0; }
+.lobby .friend button.go, .settings .friend button.go { border-color: #5cff8a; color: #b8ffd0; }
+.settings .friend { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
+.settings .friend b { flex: 1; }
+.settings .dot { width: 8px; height: 8px; border-radius: 50%; background: #5cff8a; }
+.settings .tag { color: #ffd76a; letter-spacing: 0.2em; }
+
+/* grids and fields never grow wider than their sheet */
+.lobby .cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.lobby select, .lobby input, .settings select, .settings input { min-width: 0; }
+
+/* ---------------------------------------------------------------- phones: full-screen sheets, big touch targets */
+@media (max-width: 700px) {
+  .lobby, .settings, .sharesheet {
+    top: 0; left: 0; right: 0; bottom: 0; transform: none; width: 100%; max-height: none; height: 100%; border: none;
+    padding: max(12px, env(safe-area-inset-top)) 12px max(16px, env(safe-area-inset-bottom)); box-shadow: none;
+    background: rgb(2, 8, 20);
+  }
+  .lobby .cols { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .lobby .row, .settings .row { flex-wrap: wrap; gap: 4px; }
+  .lobby .row select, .settings .row select, .settings .row input[type='password'] { flex: 1 1 100%; max-width: 100%; width: 100%; }
+  .lobby input, .lobby select, .settings input, .settings select, .sharesheet input { font-size: 16px; } /* no iOS zoom on focus */
+  .lobby button, .settings button, .sharesheet button { min-height: 40px; }
+  .lobby button.small, .settings button.small, .sharesheet button.small { min-height: 34px; padding: 4px 10px; }
+  .lobby .line { flex-wrap: wrap; }
+  .lobby .line input.callsign { flex: 1 1 60%; }
+  .lobby .friends .line input { flex: 1 1 40%; }
+  .lobby .foot { flex-wrap: wrap; justify-content: stretch; }
+  .lobby .foot button { flex: 1; }
+  .settings .tabs { flex-wrap: wrap; }
+  .settings .tabs button { flex: 1 1 40%; }
+  .sharesheet .bigcode { gap: 5px; }
+  .sharesheet .bigcode span { width: 46px; height: 56px; font-size: 28px; }
+  .sharesheet .line { flex-wrap: wrap; }
+  .sharesheet .line button.small { flex: 1 1 45%; }
+  .matchbar { gap: 6px; padding: 3px 6px; right: 4px; }
+  .matchbar .usa, .matchbar .ussr, .matchbar .roster { overflow: hidden; text-overflow: ellipsis; max-width: 28vw; white-space: nowrap; flex-shrink: 1; }
+}

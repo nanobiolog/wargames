@@ -8,6 +8,7 @@ interface HudHost {
   setMode(m: PhoneMode): void;
   menu(): void;
   share(): void;
+  onResize?(): void;
 }
 
 const DEFCON_CLASS: Record<number, string> = { 5: 'd5', 4: 'd4', 3: 'd3', 2: 'd2', 1: 'd1' };
@@ -38,11 +39,14 @@ export class PhoneHud {
     share.onclick = () => host.share();
     const menu = document.createElement('button');
     menu.textContent = '☰';
+    menu.className = 'menubtn';
     menu.onclick = () => host.menu();
     tabs.append(share, menu);
     this.el.append(this.stats, tabs);
     root.append(this.el);
     this.syncTabs();
+    // the header's height depends on how its buttons wrap; keep the layout in step with it
+    new ResizeObserver(() => host.onResize?.()).observe(this.el);
   }
 
   height() {
@@ -56,7 +60,7 @@ export class PhoneHud {
   update(s: Snapshot) {
     if (!document.body.classList.contains('phone')) return;
     const role = s.viewer;
-    const lvl = role === 'SPECTATOR' ? Math.min(s.defcon.USA, s.defcon.USSR) : s.defcon[role];
+    const lvl = role === 'SPECTATOR' ? Math.min(...Object.values(s.defcon)) : s.defcon[role];
     const clock = new Date(s.startEpoch + s.t * 1000).toISOString().slice(11, 16);
     this.stats.innerHTML =
       `<span class="side ${role === 'USSR' ? 'su' : 'us'}">${role === 'SPECTATOR' ? 'OBS' : role}</span>` +

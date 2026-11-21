@@ -266,8 +266,9 @@ export class Online {
     const L = this.lobby;
     const pending = new URLSearchParams(location.search).get('m');
     L.innerHTML = `
-      <div class="ph">STRATCOM // COLD LAUNCH</div>
+      <div class="ph">STRATCOM // COLD LAUNCH ${this.host.client.match ? '<button class="small close">×</button>' : ''}</div>
       ${note ? `<p class="note">${esc(note)}</p>` : ''}
+      <div class="sec invsec ${this.invites.length ? '' : 'hidden'}"><div class="lbl">INVITES</div><div class="invites"></div></div>
       <div class="sec">
         <div class="lbl">YOUR CALLSIGN</div>
         <div class="line"><input class="callsign" maxlength="20" value="${esc(this.id.name)}"><button class="dice" title="Random callsign">⚄</button></div>
@@ -346,6 +347,8 @@ export class Online {
       else this.host.toast(`MATCH ${m.code} STARTED`, 'hot');
     };
     q<HTMLButtonElement>('.settingsbtn').onclick = () => this.openSettings();
+    L.querySelector<HTMLButtonElement>('.ph .close')?.addEventListener('click', () => L.classList.add('hidden'));
+    this.renderInvites(L.querySelector('.invites'));
     q<HTMLButtonElement>('.local').onclick = () => { L.classList.add('hidden'); this.host.showLocalConnect('Paste the session link printed in your terminal.'); };
     this.renderFriends();
     L.classList.remove('hidden');
@@ -435,27 +438,56 @@ export class Online {
     ws.onclose = () => { clearInterval(ping); window.setTimeout(() => this.openInbox(), 5000 + Math.random() * 5000); };
   }
 
+  /**
+   * Invites never cover the game: they go to an inbox (Settings → INVITES, and the lobby), and a
+   * small count badge appears on ☰ / SETTINGS until you look at them.
+   */
+  private invites: { from: string; fromTag: string; code: string; at: number }[] = [];
+
   private showInvite(from: string, fromTag: string, code: string) {
     if (this.host.client.match?.code === code) return; // already there
-    for (const old of this.root.querySelectorAll('.invite')) old.remove();
-    const box = h('div', 'invite');
-    box.innerHTML = `<b>${esc(from)}</b> invites you to match <b>${esc(code)}</b> `;
-    const yes = h('button', 'small', 'JOIN');
-    yes.onclick = () => {
-      box.remove();
-      // accepting makes the inviter a friend, so inviting back is one tap
-      if (/^[2-9A-Z]{5}$/.test(fromTag) && fromTag !== this.id.tag && !this.friends.some((f) => f.tag === fromTag)) {
-        this.friends = [...this.friends, { tag: fromTag, name: cleanCallsign(from) ?? fromTag }];
-        this.host.store.set('friends', this.friends);
-      }
-      this.lobby.classList.add('hidden');
-      void this.join(code);
-    };
-    const no = h('button', 'small', 'LATER');
-    no.onclick = () => box.remove();
-    box.append(yes, no);
-    this.root.append(box);
-    window.setTimeout(() => box.remove(), 60_000);
+    this.invites = [{ from, fromTag, code, at: Date.now() }, ...this.invites.filter((i) => i.code !== code)].slice(0, 10);
+    this.updateBadge();
+    this.lobby.querySelector('.invsec')?.classList.remove('hidden');
+    if (!this.lobby.classList.contains('hidden')) this.renderInvites(this.lobby.querySelector('.invites'));
+    if (!this.settingsBox.classList.contains('hidden')) this.renderInvites(this.settingsBox.querySelector('.tab.inv'));
+  }
+
+  private updateBadge() {
+    const n = this.invites.length;
+    document.body.style.setProperty('--inv', n ? `"${n}"` : '""');
+    document.body.classList.toggle('has-invites', n > 0);
+  }
+
+  private acceptInvite(code: string) {
+    const inv = this.invites.find((i) => i.code === code);
+    this.invites = this.invites.filter((i) => i.code !== code);
+    this.updateBadge();
+    // accepting makes the inviter a friend, so inviting back is one tap
+    if (inv && /^[2-9A-Z]{5}$/.test(inv.fromTag) && inv.fromTag !== this.id.tag && !this.friends.some((f) => f.tag === inv.fromTag)) {
+      this.friends = [...this.friends, { tag: inv.fromTag, name: cleanCallsign(inv.from) ?? inv.fromTag }];
+      this.host.store.set('friends', this.friends);
+    }
+    for (const el of [this.lobby, this.settingsBox, this.shareBox]) el.classList.add('hidden');
+    void this.join(code);
+  }
+
+  private renderInvites(box: Element | null) {
+    if (!box) return;
+    box.innerHTML = '';
+    if (!this.invites.length) { box.append(h('p', 'hint', 'No invites right now. Friends who have your tag can invite you; invites appear here.')); return; }
+    for (const i of this.invites) {
+      const row = h('div', 'friend');
+      const mins = Math.max(0, Math.round((Date.now() - i.at) / 60000));
+      row.innerHTML = `<span class="dot on"></span><b>${esc(i.from)}</b> <span class="tag">${esc(i.code)}</span> <span class="hint">${mins ? `${mins} min ago` : 'now'}</span>`;
+      const yes = h('button', 'small go', 'JOIN');
+      yes.onclick = () => this.acceptInvite(i.code);
+      const no = h('button', 'small', '×');
+      no.title = 'Dismiss';
+      no.onclick = () => { this.invites = this.invites.filter((x) => x !== i); this.updateBadge(); this.renderInvites(box); };
+      row.append(yes, no);
+      box.append(row);
+    }
   }
 
   // ------------------------------------------------------------------ match bar
@@ -490,7 +522,8 @@ export class Online {
 
   // ------------------------------------------------------------------ settings
 
-  openSettings(tab: 'graphics' | 'player' | 'ai' = 'graphics') {
+  openSettings(tab?: 'graphics' | 'player' | 'ai' | 'inv') {
+    tab ??= this.invites.length ? 'inv' : 'graphics';
     const S = this.settingsBox;
     const s = this.host.settings;
     const k = this.keys();
@@ -498,7 +531,8 @@ export class Online {
     const mask = (v?: string) => (v ? `${v.slice(0, 7)}…${v.slice(-4)}` : 'not set');
     S.innerHTML = `
       <div class="ph">SETTINGS <button class="small close">×</button></div>
-      <div class="tabs"><button data-t="graphics">GRAPHICS</button><button data-t="player">PLAYER</button><button data-t="ai">AI KEYS</button></div>
+      <div class="tabs"><button data-t="inv" class="invtab">INVITES${this.invites.length ? ` (${this.invites.length})` : ''}</button><button data-t="graphics">GRAPHICS</button><button data-t="player">PLAYER</button><button data-t="ai">AI KEYS</button></div>
+      <div class="tab inv"></div>
       <div class="tab graphics">
         <label class="row">Quality <select class="quality">${Object.entries(QUALITY).map(([q, v]) => `<option value="${q}" ${q === s.quality ? 'selected' : ''}>${v.label}</option>`).join('')}</select></label>
         <label class="row">Frame-rate cap <select class="fps"><option value="30">30 fps (saves battery)</option><option value="60">60 fps</option><option value="0">Display refresh rate</option></select></label>
@@ -529,6 +563,7 @@ export class Online {
     };
     for (const b of S.querySelectorAll<HTMLButtonElement>('.tabs button')) b.onclick = () => show(b.dataset.t!);
     show(tab);
+    this.renderInvites(S.querySelector('.tab.inv'));
     q<HTMLButtonElement>('.close').onclick = () => S.classList.add('hidden');
     const save = () => { this.host.store.set('settings', s); this.host.applySettings(); };
     const fps = q<HTMLSelectElement>('.fps'); fps.value = String(s.fpsCap);
