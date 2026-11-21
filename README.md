@@ -1,8 +1,18 @@
 # STRATCOM // COLD LAUNCH
 
-A real-time 1983 USA-vs-USSR strategic command game. You give orders from **your own terminal**. A glowing
-**vector wall display** (Electron or any browser, on one monitor or several) shows the war room live. Your
-opponent can be the built-in doctrine AI, **Gemini** or **Claude**, and AI coding tools can command your side through **MCP**.
+**▶ Play in your browser: [coldlaunch.nano-carbay.workers.dev](https://coldlaunch.nano-carbay.workers.dev)**: no install or sign-up. Pick a callsign, create a match and send the 5-letter code to a friend.
+
+A real-time 1983 USA-vs-USSR strategic command game. You give orders from **your own terminal**, from the **browser**
+or from your **phone**. A glowing **vector wall display** (Electron or any browser, on one monitor or several) shows the
+war room live. Your opponent can be a friend online, the built-in doctrine AI, **Gemini** or **Claude**, and AI coding
+tools can command your side through **MCP**.
+
+| | |
+|---|---|
+| **Online matches** | Create a match, share the code (`K7M2Q`) or a QR code, invite friends by tag. Spectators get a TV view of everything |
+| **Every screen you own** | Command the same side from your PC, a second monitor and your phone at once. Scan "my other screens" to link them |
+| **Your AI key stays yours** | Bring your own Claude or Gemini key: it is stored only in your browser and goes straight to the provider |
+| **Terminal first** | `npm start -- --join K7M2Q` joins an online match from any terminal, with type-ahead for every order |
 
 The look is inspired by early-80s NORAD-style vector displays. The game, its name, its text and its endings are original.
 
