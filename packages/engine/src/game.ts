@@ -1,14 +1,15 @@
 import {
-  type City, type Command, type Contact, type Detonation, type GameEvent, type LatLon, type Missile,
+  type ScenarioDef, type FactionDef, type Stance, type City, type Command, type Contact, type Detonation, type GameEvent, type LatLon, type Missile,
   type Role, type Side, type SideScore, type Snapshot, type StaticWorld, type Unit, type AiStatus,
-  DEFCON_RULES, DEFCON_NAMES, SIDES, enemyOf, distKm, bearing, destination, stepToward, parseLatLon,
+  DEFCON_RULES, DEFCON_NAMES, distKm, bearing, destination, stepToward, parseLatLon,
   ballisticFlightSec, apexKm, softKillKm, hardKillProb, ballisticPos, fmtLatLon, describeCommand,
 } from '@coldlaunch/shared';
-import { buildUnits, CITIES, SEA_AREAS, loadLandMask, loadPlaces, type Place } from '@coldlaunch/data';
+import { getScenario, loadLandMask, loadPlaces, type Place } from '@coldlaunch/data';
 import { Rng } from './rng.ts';
 import { OceanNav, RouteJob } from './nav.ts';
 
 export const TICK_SEC = 0.1; // real seconds per tick
+/** Clock and time limit of the classic scenario (each scenario carries its own). */
 export const SCENARIO_START = Date.UTC(1983, 10, 8, 21, 0, 0); // 8 Nov 1983 21:00Z
 export const TIME_LIMIT = 8 * 3600;
 /**
@@ -55,11 +56,19 @@ export interface Target {
 interface Intel {
   contacts: Record<string, Contact>; // keyed by real unit id
   alias: Record<string, string>; // real id -> UNK alias
-  enemyDefcon: number;
-  enemyDefconPending?: { value: number; at: number };
+  /** assessed DEFCON of every other faction */
+  knownDefcon: Record<Side, number>;
+  /** pending assessments (arrive after an intelligence delay); key = faction */
+  defconPending: Record<Side, { value: number; at: number } | undefined>;
 }
 
 export interface GameState {
+  /** scenario id (saves from before scenarios existed are '1983') */
+  scenario?: string;
+  /** faction order of this game (copied from the scenario) */
+  factions?: Side[];
+  /** current relations; may change during play (alliances, treaties, betrayal) */
+  relations?: [Side, Side, Stance][];
   seed: number;
   rng: number;
   tick: number;
@@ -120,39 +129,80 @@ export class Game {
   /** Status for AI opponents, filled in by the AI driver. */
   ai: Partial<Record<Side, AiStatus>> = {};
 
-  constructor(seed = Date.now() % 1e9, state?: GameState) {
+  /** the scenario this game is playing */
+  readonly sc: ScenarioDef;
+  private factionIdx = new Map<Side, FactionDef>();
+
+  constructor(seed = Date.now() % 1e9, state?: GameState, scenarioId = '1983') {
     if (state) {
+      migrateState(state);
       this.s = state;
+      this.sc = getScenario(state.scenario);
     } else {
-      const units = buildUnits().map((u) => ({ ...u, missilesMax: u.missiles }));
-      const cities = CITIES.map((c) => ({ ...c }));
+      this.sc = getScenario(scenarioId);
+      const sc = this.sc;
+      const ids = sc.factions.map((f) => f.id);
+      const per = <T>(fn: (id: Side) => T) => Object.fromEntries(ids.map((id) => [id, fn(id)])) as Record<Side, T>;
+      const units = sc.units().map((u) => ({ ...u, missilesMax: u.missiles }));
+      const cities = sc.cities();
       this.s = {
+        scenario: sc.id, factions: ids, relations: sc.relations.map((r) => [...r] as [Side, Side, Stance]),
         seed, rng: seed, tick: 0, t: 0, speed: 10, paused: false,
-        defcon: { USA: 5, USSR: 5 }, defconChangedT: { USA: -1e9, USSR: -1e9 },
+        defcon: per(() => 5), defconChangedT: per(() => -1e9),
         tension: 22,
         units, cities, missiles: [], detonations: [], orders: [],
-        intel: { USA: { contacts: {}, alias: {}, enemyDefcon: 5 }, USSR: { contacts: {}, alias: {}, enemyDefcon: 5 } },
+        intel: per((id) => ({ contacts: {}, alias: {}, knownDefcon: Object.fromEntries(ids.filter((o) => o !== id).map((o) => [o, 5])), defconPending: {} })),
         events: [],
-        score: {
-          USA: this.initScore('USA', units, cities),
-          USSR: this.initScore('USSR', units, cities),
-        },
+        score: per((id) => this.initScore(id, units, cities)),
         over: null,
         nextIncidentT: 240,
         nextSatPassT: 60,
-        hotlineCooldown: { USA: 0, USSR: 0 },
+        hotlineCooldown: per(() => 0),
         counters: {},
         log: [],
       };
     }
+    for (const f of this.sc.factions) this.factionIdx.set(f.id, f);
     this.rng = new Rng(this.s.rng);
     this.reindex();
     if (!state) {
-      this.emit({ kind: 'info', text: 'STRATCOM // COLD LAUNCH — SCENARIO 1983: AUTUMN EXERCISE' });
-      this.emit({ kind: 'info', text: 'NATO COMMAND POST EXERCISE UNDERWAY IN WESTERN EUROPE. WARSAW PACT INTELLIGENCE ON HEIGHTENED WATCH.' });
-      this.emit({ kind: 'info', text: 'ALL FORCES AT DEFCON 5. TYPE "help" FOR ORDERS.' });
+      for (const line of this.sc.intro) this.emit({ kind: 'info', text: line });
       this.updateIntel(0);
     }
+  }
+
+  // ================================================================== factions & relations
+
+  /** Faction ids in scenario order. */
+  get factions(): Side[] {
+    return this.s.factions ?? this.sc.factions.map((f) => f.id);
+  }
+
+  faction(id: Side): FactionDef | undefined {
+    return this.factionIdx.get(id);
+  }
+
+  stance(a: Side, b: Side): Stance {
+    if (a === b) return 'allied';
+    for (const [x, y, st] of this.s.relations ?? this.sc.relations) if ((x === a && y === b) || (x === b && y === a)) return st;
+    return 'neutral';
+  }
+
+  hostile(a: Side, b: Side) {
+    return a !== b && this.stance(a, b) === 'hostile';
+  }
+
+  /** same faction or allied */
+  friendly(a: Side, b: Side) {
+    return a === b || this.stance(a, b) === 'allied';
+  }
+
+  hostilesOf(side: Side): Side[] {
+    return this.factions.filter((f) => this.hostile(side, f));
+  }
+
+  alliesOf(side: Side): Side[] {
+    return this.factions.filter((f) => f !== side && this.stance(side, f) === 'allied');
   }
 
   private initScore(side: Side, units: Unit[], cities: City[]): SideScore {
@@ -195,7 +245,12 @@ export class Game {
   // ================================================================== world info
 
   staticWorld(): StaticWorld {
-    return { cities: this.s.cities, seaAreas: SEA_AREAS, scenario: '1983 AUTUMN EXERCISE' };
+    const sc = this.sc;
+    return {
+      cities: this.s.cities, seaAreas: sc.seaAreas, scenario: sc.name, scenarioId: sc.id,
+      factions: sc.factions.map(({ id, name, short, color, playable, brief }) => ({ id, name, short, color, playable, brief })),
+      relations: this.s.relations ?? sc.relations,
+    };
   }
 
   // ================================================================== commands
@@ -225,9 +280,10 @@ export class Game {
         }
         s.defcon[side] = cmd.level;
         s.defconChangedT[side] = s.t;
-        const enemy = enemyOf(side);
-        // enemy intelligence notices after a delay
-        s.intel[enemy].enemyDefconPending = { value: cmd.level, at: s.t + this.rng.range(60, 200) };
+        // every other faction's intelligence notices after a delay
+        for (const other of this.factions) {
+          if (other !== side) s.intel[other].defconPending[side] = { value: cmd.level, at: s.t + this.rng.range(60, 200) };
+        }
         if (cmd.level <= 2) for (const u of s.units) if (u.side === side && u.kind === 'silo' && u.status === 'ready') u.status = 'alert';
         this.emit({ kind: 'defcon', visibleTo: [side], side, text: `${side} DEFCON ${cmd.level} — ${DEFCON_NAMES[cmd.level]}` });
         return { ok: true, msg: `DEFCON ${cmd.level} (${DEFCON_NAMES[cmd.level]})` };
@@ -355,8 +411,14 @@ export class Game {
         return { ok: true, msg: s.paused ? 'SIMULATION PAUSED' : 'SIMULATION RESUMED' };
 
       case 'hotline': {
-        const enemy = enemyOf(side);
-        this.emit({ kind: 'hotline', visibleTo: [side, enemy], from: side, text: `${side} → ${enemy}: ${cmd.text}` });
+        let to = this.factions.filter((f) => f !== side);
+        if (cmd.to) {
+          const want = cmd.to.toUpperCase();
+          const f = this.sc.factions.find((x) => x.id === want || x.short === want || x.name === want);
+          if (!f || f.id === side) return { ok: false, msg: `UNKNOWN FACTION "${cmd.to}" — ONE OF ${to.join(', ')}` };
+          to = [f.id];
+        }
+        this.emit({ kind: 'hotline', visibleTo: [side, ...to], from: side, text: `${side} → ${to.join(', ')}: ${cmd.text}` });
         if (s.t >= s.hotlineCooldown[side]) {
           s.tension = Math.max(0, s.tension - 2);
           s.hotlineCooldown[side] = s.t + 300;
@@ -420,8 +482,8 @@ export class Game {
   }
 
   private failSafePoint(base: Unit): LatLon {
-    const aim = base.side === 'USA' ? { lat: 55.75, lon: 37.62 } : { lat: 38.9, lon: -77.0 };
-    return destination(base, bearing(base, aim), base.side === 'USA' ? 2400 : 2200);
+    const fs = this.faction(base.side)?.failSafe ?? { aim: { lat: 0, lon: 0 }, km: 2000 };
+    return destination(base, bearing(base, fs.aim), fs.km);
   }
 
   private homeFor(u: Unit): Unit | undefined {
@@ -481,7 +543,8 @@ export class Game {
     const ll = parseLatLon(ref);
     if (ll) return { pos: ll, name: fmtLatLon(ll) };
     const r = ref.trim().toLowerCase();
-    const sea = SEA_AREAS.find((a) => a.name.toLowerCase() === r) ?? SEA_AREAS.find((a) => a.name.toLowerCase().includes(r));
+    const seas = this.sc.seaAreas;
+    const sea = seas.find((a) => a.name.toLowerCase() === r) ?? seas.find((a) => a.name.toLowerCase().includes(r));
     if (sea) return { pos: { lat: sea.lat, lon: sea.lon }, name: sea.name };
     const own = this.s.units.find((u) => u.side === side && (u.id === r || u.name.toLowerCase() === r));
     if (own) return { pos: { lat: own.lat, lon: own.lon }, name: own.name };
@@ -534,7 +597,7 @@ export class Game {
           id: this.nextId('m'), side: o.side, type, from: { lat: u.lat, lon: u.lon }, to: o.target.pos,
           launchT: s.t + i * o.stagger, impactT: s.t + i * o.stagger + flight, apexKm: apexKm(d, type),
           warheads: u.warheads ?? 1, yieldKt: u.yieldKt ?? 500, source: u.id, target: o.target.name, targetId: o.target.unitId ?? o.target.cityId,
-          seenBy: [o.side], confirmedBy: [o.side], spreadKm: o.target.cityId ? 6 : 1.5,
+          seenBy: [o.side, ...this.alliesOf(o.side)], confirmedBy: [o.side, ...this.alliesOf(o.side)], spreadKm: o.target.cityId ? 6 : 1.5,
         };
         s.missiles.push(m);
       }
@@ -650,7 +713,7 @@ export class Game {
       if (!m.abmDone && m.type !== 'ABM' && s.t >= m.impactT - 70) {
         m.abmDone = true;
         for (const a of s.units) {
-          if (a.kind !== 'abm' || a.side === m.side || a.status === 'destroyed' || !(a.missiles ?? 0)) continue;
+          if (a.kind !== 'abm' || !this.hostile(a.side, m.side) || a.status === 'destroyed' || !(a.missiles ?? 0)) continue;
           if (distKm(a, m.to) > (a.defenceKm ?? 300)) continue;
           let killed = 0;
           for (let w = 0; w < m.warheads && (a.missiles ?? 0) > 0; w++) {
@@ -704,7 +767,7 @@ export class Game {
       const k = remaining * cover * fall;
       c.killed += k;
       killed += k;
-      if (c.side !== 'OTHER') s.score[c.side].killed += k;
+      if (s.score[c.side]) s.score[c.side].killed += k;
     }
     for (const u of s.units) {
       if (u.status === 'destroyed') continue;
@@ -775,7 +838,7 @@ export class Game {
     for (const b of s.units) {
       if (b.kind !== 'bomber' || b.status === 'destroyed') continue;
       for (const d of s.units) {
-        if (d.side === b.side || d.status === 'destroyed') continue;
+        if (!this.hostile(d.side, b.side) || d.status === 'destroyed') continue;
         if ((d.kind !== 'afb_int' && d.kind !== 'carrier') || !(d.interceptors ?? 0)) continue;
         if (distKm(b, d) > (d.defenceKm ?? 500)) continue;
         if (s.defcon[d.side] > 3 && b.status !== 'enroute') continue; // peacetime: escort, don't shoot
@@ -793,7 +856,7 @@ export class Game {
       if ((h.kind !== 'ssn' && h.kind !== 'carrier') || h.status === 'destroyed') continue;
       const range = h.kind === 'ssn' ? (h.defenceKm ?? 130) : 90;
       for (const t of s.units) {
-        if (t.side === h.side || t.status === 'destroyed' || (t.kind !== 'ssbn' && t.kind !== 'ssn')) continue;
+        if (!this.hostile(t.side, h.side) || t.status === 'destroyed' || (t.kind !== 'ssbn' && t.kind !== 'ssn')) continue;
         if (distKm(h, t) > range) continue;
         const intel = s.intel[h.side];
         const known = intel.contacts[t.id];
@@ -834,20 +897,21 @@ export class Game {
     const s = this.s;
     const satPass = s.t >= s.nextSatPassT;
     if (satPass) s.nextSatPassT = s.t + 1200;
-    for (const side of SIDES) {
+    for (const side of this.factions) {
       const intel = s.intel[side];
-      const enemy = enemyOf(side);
-      if (intel.enemyDefconPending && s.t >= intel.enemyDefconPending.at) {
-        const v = intel.enemyDefconPending.value;
-        intel.enemyDefcon = v;
-        intel.enemyDefconPending = undefined;
-        this.emit({ kind: 'alert', visibleTo: [side], side, text: `INTELLIGENCE: ${enemy} FORCES ASSESSED AT DEFCON ${v}` });
-        if (v <= 2) s.tension = Math.min(100, s.tension + 4);
+      for (const other of this.factions) {
+        const pend = intel.defconPending[other];
+        if (!pend || s.t < pend.at) continue;
+        intel.knownDefcon[other] = pend.value;
+        intel.defconPending[other] = undefined;
+        this.emit({ kind: 'alert', visibleTo: [side], side, text: `INTELLIGENCE: ${other} FORCES ASSESSED AT DEFCON ${pend.value}` });
+        if (pend.value <= 2 && this.hostile(side, other)) s.tension = Math.min(100, s.tension + 4);
       }
       const sensors = s.units.filter((u) => u.side === side && u.status !== 'destroyed');
       const airSensors = sensors.filter((u) => (u.kind === 'radar' || u.kind === 'afb_int' || u.kind === 'carrier') && (u.defenceKm ?? 0) > 0);
       for (const e of s.units) {
-        if (e.side !== enemy) continue;
+        // allies share their picture (they appear as friendly forces); everyone else is a contact
+        if (this.friendly(side, e.side)) continue;
         if (FIXED_KINDS.has(e.kind)) {
           this.seeContact(side, e, true);
           continue;
@@ -884,10 +948,11 @@ export class Game {
       }
       // missiles
       const radars = sensors.filter((u) => (u.kind === 'radar' || u.kind === 'abm') && (u.radarKm ?? 0) > 0);
-      const satDelay = side === 'USA' ? 50 : 80;
-      const satP = side === 'USA' ? 0.97 : 0.85;
+      const fac = this.faction(side);
+      const satDelay = fac?.satDelaySec ?? 60;
+      const satP = fac?.satDetectP ?? 0.9;
       for (const m of s.missiles) {
-        if (m.side === side || m.phantomFor || s.t < m.launchT) continue;
+        if (this.friendly(m.side, side) || m.phantomFor || s.t < m.launchT) continue;
         if (!m.seenBy.includes(side) && s.t - m.launchT > satDelay) {
           if (this.rng.chance(satP)) {
             m.seenBy.push(side);
@@ -917,13 +982,13 @@ export class Game {
     const s = this.s;
     const war = s.detonations.length > 0 || s.missiles.some((m) => !m.phantomFor);
     if (!war) {
-      // tension relaxes when both sides stand down
-      const calm = Math.min(s.defcon.USA, s.defcon.USSR);
+      // tension relaxes when every side stands down
+      const calm = Math.min(...this.factions.map((f) => s.defcon[f]));
       s.tension = Math.max(0, s.tension - (calm >= 4 ? 0.25 : calm >= 3 ? 0.08 : -0.05) * (dt / 60));
       s.tension = Math.min(100, s.tension);
       if (s.t >= s.nextIncidentT) {
         s.nextIncidentT = s.t + this.rng.range(480, 1500);
-        const inc = this.rng.pick(INCIDENTS);
+        const inc = this.rng.pick(this.sc.incidents);
         s.tension = Math.min(100, s.tension + inc.tension);
         this.emit({ kind: 'warn', text: inc.text });
       }
@@ -934,8 +999,11 @@ export class Game {
 
   private falseAlarm() {
     const s = this.s;
-    const victim = this.rng.pick(SIDES);
-    const enemy = enemyOf(victim);
+    const victim = this.rng.pick(this.factions);
+    // with a single adversary (the classic game) no extra random draw is made
+    const foes = this.hostilesOf(victim).filter((f) => s.units.some((u) => u.side === f && u.kind === 'silo'));
+    if (!foes.length) return;
+    const enemy = foes.length === 1 ? foes[0] : this.rng.pick(foes);
     const fields = s.units.filter((u) => u.side === enemy && u.kind === 'silo');
     const targets = s.units.filter((u) => u.side === victim && u.kind === 'silo');
     if (!fields.length || !targets.length) return;
@@ -957,26 +1025,37 @@ export class Game {
   private checkEnd() {
     const s = this.s;
     if (s.over) return;
-    const frac = (side: Side) => s.score[side].killed / s.score[side].popStart;
+    const ids = this.factions;
+    const frac = (side: Side) => (s.score[side].popStart > 0 ? s.score[side].killed / s.score[side].popStart : 0);
     const remaining = (side: Side) => this.forcesOf(side) / Math.max(1, s.score[side].forcesStart);
     const inFlight = s.missiles.some((m) => !m.phantomFor) || s.orders.length > 0 || s.units.some((u) => u.kind === 'bomber' && u.status === 'enroute');
     let over: Snapshot['over'] = null;
     if (s.detonations.length) {
-      const fu = frac('USA'), fs = frac('USSR');
-      if (!inFlight && fu > 0.2 && fs > 0.2) over = { winner: 'NONE', reason: 'MUTUAL ANNIHILATION' };
-      else if (!inFlight && (fu > 0.4 || remaining('USA') < 0.05) && fs < 0.08) over = { winner: 'USSR', reason: 'UNITED STATES NATIONAL COMMAND DESTROYED' };
-      else if (!inFlight && (fs > 0.4 || remaining('USSR') < 0.05) && fu < 0.08) over = { winner: 'USA', reason: 'SOVIET NATIONAL COMMAND DESTROYED' };
-      else if (!inFlight && s.t - s.detonations[s.detonations.length - 1].t > 2400) over = { winner: 'NONE', reason: 'EXCHANGE EXHAUSTED — NO FURTHER STRIKES' };
-    } else if (s.t > 3 * 3600 && s.defcon.USA === 5 && s.defcon.USSR === 5 && s.tension < 15) {
-      over = { winner: 'NONE', reason: 'CRISIS DEFUSED — BOTH SIDES STAND DOWN' };
+      if (!inFlight) {
+        // two mutually hostile factions both badly hit
+        const hit = ids.filter((f) => frac(f) > 0.2);
+        if (hit.some((a, i) => hit.slice(i + 1).some((b) => this.hostile(a, b)))) over = { winner: 'NONE', reason: 'MUTUAL ANNIHILATION' };
+        // a faction's command destroyed while its adversaries are largely untouched (scenario order)
+        for (const f of ids) {
+          if (over) break;
+          const foes = this.hostilesOf(f);
+          if (!foes.length || !(frac(f) > 0.4 || remaining(f) < 0.05) || !foes.every((e) => frac(e) < 0.08)) continue;
+          const winner = foes.length === 1 ? foes[0] : foes.reduce((a, b) => (this.forcesOf(b) > this.forcesOf(a) ? b : a));
+          over = { winner, reason: this.faction(f)?.defeatText ?? `${f} NATIONAL COMMAND DESTROYED` };
+        }
+        if (!over && s.t - s.detonations[s.detonations.length - 1].t > 2400) over = { winner: 'NONE', reason: 'EXCHANGE EXHAUSTED — NO FURTHER STRIKES' };
+      }
+    } else if (s.t > 3 * 3600 && ids.every((f) => s.defcon[f] === 5) && s.tension < 15) {
+      over = { winner: 'NONE', reason: ids.length === 2 ? 'CRISIS DEFUSED — BOTH SIDES STAND DOWN' : 'CRISIS DEFUSED — ALL SIDES STAND DOWN' };
     }
-    if (!over && s.t >= TIME_LIMIT && !inFlight) over = { winner: 'NONE', reason: s.detonations.length ? 'EXCHANGE EXHAUSTED' : 'EXERCISE CONCLUDED WITHOUT WAR' };
+    if (!over && s.t >= this.sc.timeLimitSec && !inFlight) over = { winner: 'NONE', reason: s.detonations.length ? 'EXCHANGE EXHAUSTED' : 'EXERCISE CONCLUDED WITHOUT WAR' };
     if (over) {
       s.over = over;
-      const total = s.score.USA.killed + s.score.USSR.killed;
+      const total = ids.reduce((a, f) => a + s.score[f].killed, 0);
       this.emit({ kind: 'end', text: `SIMULATION COMPLETE: ${over.reason}` });
       if (total > 0) {
-        this.emit({ kind: 'end', text: `CASUALTIES — USA ${fmtPop(s.score.USA.killed)} / USSR ${fmtPop(s.score.USSR.killed)}. NO OBJECTIVE IN THIS EXERCISE OUTWEIGHS THESE FIGURES.` });
+        const listed = ids.length <= 2 ? ids : ids.filter((f) => s.score[f].killed > 0);
+        this.emit({ kind: 'end', text: `CASUALTIES — ${listed.map((f) => `${f} ${fmtPop(s.score[f].killed)}`).join(' / ')}. NO OBJECTIVE IN THIS EXERCISE OUTWEIGHS THESE FIGURES.` });
         this.emit({ kind: 'end', text: 'ASSESSMENT: THE ONLY ACCEPTABLE OUTCOME IN THIS SCENARIO IS THE ONE WHERE THE MISSILES STAY IN THEIR SILOS.' });
       } else {
         this.emit({ kind: 'end', text: 'ASSESSMENT: RESTRAINT HELD. ZERO CASUALTIES IS THE HIGHEST SCORE THIS SIMULATION RECORDS.' });
@@ -990,23 +1069,24 @@ export class Game {
     const s = this.s;
     const spectator = role === 'SPECTATOR';
     const side = spectator ? null : (role as Side);
-    const units = spectator ? s.units : s.units.filter((u) => u.side === side);
+    // own forces plus allies' (allies share their picture)
+    const units = spectator ? s.units : s.units.filter((u) => this.friendly(u.side, side!));
     const contacts: Contact[] = spectator ? [] : Object.values(s.intel[side!].contacts);
     const missiles: Missile[] = [];
     for (const m of s.missiles) {
       if (s.t < m.launchT) continue;
       if (m.phantomFor) {
         if (spectator || m.phantomFor !== side) continue;
-      } else if (!spectator && m.side !== side && !m.seenBy.includes(side!)) continue;
+      } else if (!spectator && !this.friendly(m.side, side!) && !m.seenBy.includes(side!)) continue;
       const { seenBy, confirmedBy, phantomFor, dropT, abmDone, spreadKm, ...view } = m;
-      missiles.push({ ...view, detected: true, confirmed: spectator || m.side === side || confirmedBy.includes(side!) });
+      missiles.push({ ...view, detected: true, confirmed: spectator || this.friendly(m.side, side!) || confirmedBy.includes(side!) });
     }
     const defcon = spectator
       ? { ...s.defcon }
-      : ({ [side!]: s.defcon[side!], [enemyOf(side!)]: s.intel[side!].enemyDefcon } as Record<Side, number>);
-    const threatMissiles = missiles.filter((m) => m.side !== side && m.type !== 'ABM');
+      : ({ [side!]: s.defcon[side!], ...s.intel[side!].knownDefcon } as Record<Side, number>);
+    const threatMissiles = missiles.filter((m) => !this.friendly(m.side, side!) && m.type !== 'ABM');
     return {
-      t: s.t, startEpoch: SCENARIO_START, speed: s.speed, paused: s.paused, viewer: role, defcon,
+      t: s.t, startEpoch: this.sc.startEpoch, speed: s.speed, paused: s.paused, viewer: role, defcon,
       tension: Math.round(s.tension),
       units: units.filter((u) => !(u.kind === 'bomber' && u.status === 'destroyed' && (u.aircraft ?? 0) === 0 && s.t > 0)),
       contacts, missiles, detonations: s.detonations.filter((d) => s.t - d.t < 1800),
@@ -1055,20 +1135,6 @@ export class Game {
   }
 }
 
-const INCIDENTS: { text: string; tension: number }[] = [
-  { text: 'NORAD: SOVIET TU-95 PAIR PROBING ALASKAN AIR DEFENSE IDENTIFICATION ZONE. INTERCEPTORS SHADOWING.', tension: 4 },
-  { text: 'SIGINT: UNUSUAL VOLUME OF ENCRYPTED TRAFFIC ON WARSAW PACT COMMAND NETS.', tension: 6 },
-  { text: 'NORTHERN FLEET SURFACE UNITS SORTIE FROM KOLA INLET.', tension: 5 },
-  { text: 'NATO EXERCISE ENTERS NUCLEAR RELEASE PROCEDURES PHASE (SIMULATED).', tension: 9 },
-  { text: 'RESIDENCY CABLES: SOVIET INTELLIGENCE ORDERED TO REPORT ANY SIGNS OF SURPRISE ATTACK PREPARATIONS.', tension: 7 },
-  { text: 'SOLAR ACTIVITY DEGRADING HF COMMUNICATIONS ACROSS THE ARCTIC.', tension: 2 },
-  { text: 'US CARRIER BATTLE GROUP CONDUCTING FLIGHT OPS NEAR KAMCHATKA.', tension: 5 },
-  { text: 'DIPLOMATIC CHANNEL: BOTH CAPITALS REQUEST CLARIFICATION OF RECENT FORCE MOVEMENTS.', tension: -4 },
-  { text: 'WEATHER: HEAVY CLOUD OVER MONTANA MISSILE FIELDS — SATELLITE GLINT REPORTS EXPECTED.', tension: 3 },
-  { text: 'ATTACK SUBMARINE TRAILING INCIDENT REPORTED IN THE NORWEGIAN SEA.', tension: 5 },
-  { text: 'PRESS REPORTS: CIVIL DEFENSE OFFICES IN SEVERAL CITIES RECEIVE UNUSUAL INSTRUCTIONS.', tension: 4 },
-  { text: 'BACK-CHANNEL: NEUTRAL INTERMEDIARY PROPOSES MUTUAL STAND-DOWN OF BOMBER ALERT.', tension: -6 },
-];
 
 function fmtPop(k: number) {
   return k >= 1000 ? `${(k / 1000).toFixed(1)}M` : `${Math.round(k)}K`;
@@ -1078,4 +1144,21 @@ function routeLen(a: LatLon, route: LatLon[]) {
   let d = 0, p = a;
   for (const q of route) { d += distKm(p, q); p = q; }
   return d;
+}
+
+/** Bring saves from before scenarios / factions up to date (they are all 1983 games). */
+function migrateState(state: GameState) {
+  state.scenario ??= '1983';
+  const sc = getScenario(state.scenario);
+  state.factions ??= sc.factions.map((f) => f.id);
+  state.relations ??= sc.relations.map((r) => [...r] as [Side, Side, Stance]);
+  for (const side of state.factions) {
+    const intel = state.intel[side] as Intel & { enemyDefcon?: number; enemyDefconPending?: { value: number; at: number } };
+    if (intel.knownDefcon) continue;
+    const others = state.factions.filter((f) => f !== side);
+    intel.knownDefcon = Object.fromEntries(others.map((o) => [o, intel.enemyDefcon ?? 5]));
+    intel.defconPending = intel.enemyDefconPending && others.length === 1 ? { [others[0]]: intel.enemyDefconPending } : {};
+    delete intel.enemyDefcon;
+    delete intel.enemyDefconPending;
+  }
 }

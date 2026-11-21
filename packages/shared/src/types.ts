@@ -1,9 +1,78 @@
 import type { LatLon } from './geo.ts';
 
-export type Side = 'USA' | 'USSR';
+/**
+ * A faction id: 'USA' and 'USSR' in the 1983 scenario, 'USA' | 'RUS' | 'CHN' | … in modern ones.
+ * (Kept under the old name `Side` so commands, saves and links are unchanged.)
+ */
+export type Side = string;
 export type Role = Side | 'SPECTATOR';
+/** Factions of the classic scenario (legacy helpers for two-player code paths). */
 export const SIDES: Side[] = ['USA', 'USSR'];
+/** Legacy two-faction helper; scenario-aware code uses hostilesOf(world, side). */
 export const enemyOf = (s: Side): Side => (s === 'USA' ? 'USSR' : 'USA');
+
+export type Stance = 'allied' | 'neutral' | 'hostile';
+
+/** What clients need to know about a faction (sent in StaticWorld). */
+export interface FactionInfo {
+  id: Side;
+  /** full name, e.g. "UNITED STATES" */
+  name: string;
+  /** short label for HUDs, e.g. "USA" */
+  short: string;
+  /** map colour (#rrggbb) */
+  color: string;
+  /** can a human take this seat */
+  playable: boolean;
+  /** one line on who they are and what they want */
+  brief: string;
+}
+
+/** Full scenario faction definition (data package). */
+export interface FactionDef extends FactionInfo {
+  /** seconds until early-warning satellites report a launch, and the chance they do */
+  satDelaySec: number;
+  satDetectP: number;
+  /** default bomber holding point: this far toward `aim` */
+  failSafe: { aim: LatLon; km: number };
+  /** end-of-game reason when this faction's command is destroyed */
+  defeatText: string;
+}
+
+export interface ScenarioDef {
+  id: string;
+  /** shown in HUDs, e.g. "1983 AUTUMN EXERCISE" */
+  name: string;
+  /** lobby description */
+  summary: string;
+  /** scenario clock 0, epoch ms */
+  startEpoch: number;
+  timeLimitSec: number;
+  factions: FactionDef[];
+  /** pairs not listed are neutral */
+  relations: [Side, Side, Stance][];
+  /** [host default, opponent default] for two-player matches */
+  defaultSides: [Side, Side];
+  intro: string[];
+  incidents: { text: string; tension: number }[];
+  units(): Unit[];
+  cities(): City[];
+  seaAreas: { name: string; lat: number; lon: number }[];
+}
+
+/** relation lookup over a StaticWorld (or anything carrying `relations`) */
+export function stanceOf(world: { relations?: [Side, Side, Stance][] } | undefined, a: Side, b: Side): Stance {
+  if (a === b) return 'allied';
+  if (!world?.relations) return 'hostile'; // classic two-player default
+  for (const [x, y, st] of world.relations) if ((x === a && y === b) || (x === b && y === a)) return st;
+  return 'neutral';
+}
+
+/** Factions hostile to `side`. Falls back to the classic USA/USSR pair. */
+export function hostilesOf(world: { factions?: FactionInfo[]; relations?: [Side, Side, Stance][] } | undefined, side: Side): Side[] {
+  if (!world?.factions?.length) return [enemyOf(side)];
+  return world.factions.filter((f) => f.id !== side && stanceOf(world, side, f.id) === 'hostile').map((f) => f.id);
+}
 
 export type UnitKind =
   | 'silo' // ICBM field
@@ -138,6 +207,7 @@ export interface GameEvent {
 export interface City extends LatLon {
   id: string;
   name: string;
+  /** owning faction, or 'OTHER' for cities outside every faction */
   side: Side | 'OTHER';
   pop: number; // thousands
   killed: number; // thousands
@@ -186,4 +256,8 @@ export interface StaticWorld {
   cities: City[];
   seaAreas: { name: string; lat: number; lon: number }[];
   scenario: string;
+  /** scenario id ('1983', 'modern') */
+  scenarioId?: string;
+  factions?: FactionInfo[];
+  relations?: [Side, Side, Stance][];
 }

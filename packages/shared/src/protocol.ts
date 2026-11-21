@@ -17,7 +17,8 @@ export const CommandSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('recall'), unit: ref }),
   z.object({ op: z.literal('speed'), value: z.number().min(0.5).max(120) }),
   z.object({ op: z.literal('pause'), value: z.boolean().optional() }),
-  z.object({ op: z.literal('hotline'), text: z.string().min(1).max(600) }),
+  /** to: one faction id; omitted = every other faction */
+  z.object({ op: z.literal('hotline'), text: z.string().min(1).max(600), to: z.string().max(40).optional() }),
   z.object({ op: z.literal('hold'), note: z.string().max(300).optional() }),
 ]);
 export type Command = z.infer<typeof CommandSchema>;
@@ -37,7 +38,8 @@ export const ClientMsgSchema = z.discriminatedUnion('t', [
   z.object({
     t: z.literal('hello'),
     token: z.string(),
-    role: z.enum(['USA', 'USSR', 'SPECTATOR']).optional(),
+    /** faction id ('USA', 'USSR', 'CHN', …) or 'SPECTATOR' */
+    role: z.string().regex(/^[A-Z]{2,12}$/).optional(),
     client: z.enum(['tui', 'gui', 'mcp', 'ai', 'other']),
     /** display name / callsign shown to other players (online matches) */
     name: z.string().max(40).optional(),
@@ -157,7 +159,7 @@ export function wsUrl(p: ParsedLink): string {
 }
 
 export function parseLink(link: string): ParsedLink | null {
-  const online = link.trim().match(/^(https?):\/\/([^:/?#]+)(?::(\d+))?\/m\/([2-9A-Za-z]{5})\/?(?:\?(?:.*&)?role=(USA|USSR|SPECTATOR))?/);
+  const online = link.trim().match(/^(https?):\/\/([^:/?#]+)(?::(\d+))?\/m\/([2-9A-Za-z]{5})\/?(?:\?(?:.*&)?role=([A-Z]{2,12}))?/);
   if (online) {
     const secure = online[1] === 'https';
     return {
@@ -165,7 +167,7 @@ export function parseLink(link: string): ParsedLink | null {
       role: online[5] as Role | undefined, online: true, secure,
     };
   }
-  const m = link.trim().match(/^(?:coldlaunch|http|ws):\/\/([^:/]+):(\d+)\/(?:s\/|\?token=)([\w-]+)(?:[?&]role=(USA|USSR|SPECTATOR))?/);
+  const m = link.trim().match(/^(?:coldlaunch|http|ws):\/\/([^:/]+):(\d+)\/(?:s\/|\?token=)([\w-]+)(?:[?&]role=([A-Z]{2,12}))?/);
   if (!m) return null;
   return { host: m[1], port: +m[2], token: m[3], role: m[4] as Role | undefined };
 }
