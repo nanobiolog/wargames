@@ -3,6 +3,7 @@
 // opening briefing and random incidents. The engine reads nothing else about the world.
 import type { ScenarioDef } from '@coldlaunch/shared';
 import { buildUnits, CITIES, SEA_AREAS } from './scenario1983.ts';
+import { MODERN } from './scenarioModern.ts';
 
 const INCIDENTS_1983: { text: string; tension: number }[] = [
   { text: 'NORAD: SOVIET TU-95 PAIR PROBING ALASKAN AIR DEFENSE IDENTIFICATION ZONE. INTERCEPTORS SHADOWING.', tension: 4 },
@@ -52,7 +53,7 @@ export const SCENARIO_1983: ScenarioDef = {
   seaAreas: SEA_AREAS,
 };
 
-export const SCENARIOS: Record<string, ScenarioDef> = { '1983': SCENARIO_1983 };
+export const SCENARIOS: Record<string, ScenarioDef> = { '1983': SCENARIO_1983, modern: MODERN };
 
 export function getScenario(id: string | undefined): ScenarioDef {
   return SCENARIOS[id ?? '1983'] ?? SCENARIO_1983;

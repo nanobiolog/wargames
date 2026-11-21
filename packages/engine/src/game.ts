@@ -218,6 +218,21 @@ export class Game {
     return a === b || this.stance(a, b) === 'allied';
   }
 
+  /**
+   * Attacking a nation that is not already an enemy makes it one (and breaks any alliance):
+   * neutrals do not stay neutral after being hit.
+   */
+  provoke(attacker: Side, victim: Side) {
+    if (attacker === victim || this.hostile(attacker, victim) || !this.faction(victim)) return;
+    const rel = (this.s.relations ??= this.sc.relations.map((r) => [...r] as [Side, Side, Stance]));
+    const i = rel.findIndex(([x, y]) => (x === attacker && y === victim) || (x === victim && y === attacker));
+    const was = this.stance(attacker, victim);
+    if (i >= 0) rel[i] = [rel[i][0], rel[i][1], 'hostile'];
+    else rel.push([attacker, victim, 'hostile']);
+    this.s.tension = Math.min(100, this.s.tension + 15);
+    this.emit({ kind: 'alert', text: `${this.faction(victim)?.name ?? victim} NOW REGARDS ${this.faction(attacker)?.name ?? attacker} AS AN ENEMY${was === 'allied' ? ' — ALLIANCE BROKEN' : ''}` });
+  }
+
   hostilesOf(side: Side): Side[] {
     return this.factions.filter((f) => this.hostile(side, f));
   }
@@ -601,6 +616,7 @@ export class Game {
       s.tension = Math.min(100, s.tension + 6);
     }
     const tside = defended?.side;
+    if (tside && n > 0) this.provoke(f.side, tside);
     this.emit({ kind: 'impact', visibleTo: tside ? [f.side, tside] : [f.side], text: `${f.id.toUpperCase()} STRIKE: ${result}${lost ? ` · ${lost} AIRCRAFT LOST` : ''}`, lat: f.lat, lon: f.lon });
     if (n <= 0) { this.lose(f, tside ?? null, `${f.id.toUpperCase()} — ALL AIRCRAFT LOST`); return; }
     const home = this.flightHome(f);
@@ -965,7 +981,10 @@ export class Game {
       const k = remaining * cover * fall;
       c.killed += k;
       killed += k;
-      if (s.score[c.side]) s.score[c.side].killed += k;
+      if (s.score[c.side]) {
+        s.score[c.side].killed += k;
+        if (k > 1) this.provoke(attacker, c.side);
+      }
     }
     for (const u of s.units) {
       if (u.status === 'destroyed') continue;
@@ -1005,6 +1024,7 @@ export class Game {
       }
       const lost = before - this.forcesOfUnit(u);
       if (lost > 0) s.score[u.side].forcesLost += lost;
+      if (gone(u) || lost > 0) this.provoke(attacker, u.side);
     }
     const det: Detonation = { id: this.nextId('d'), t: s.t, side: attacker, lat: p.lat, lon: p.lon, yieldKt, target: targetName, killed };
     s.detonations.push(det);

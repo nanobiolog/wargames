@@ -33,7 +33,8 @@ export class RuleBrain {
     const confirmed = inbound.filter((m) => m.confirmed);
     if (s.detonations.some((d) => hostiles.includes(d.side)) || s.score[side].killed > 0) this.atWar = true;
     const hitUs = this.atWar;
-    const live = s.units.filter((u) => u.status !== 'destroyed');
+    // only our own forces: the snapshot also shows allies' units, which we cannot order
+    const live = s.units.filter((u) => u.side === side && u.status !== 'destroyed');
 
     // --- diplomacy: react to hotline messages from the other side
     const newHot = events.filter((e) => e.kind === 'hotline' && !!e.from && e.from !== side);
@@ -121,7 +122,8 @@ export class RuleBrain {
     const cmds: Command[] = [];
     const wings = live.filter((u) => (u.kind === 'carrier' || u.kind === 'afb_int') && (u.interceptors ?? 0) >= 2);
     const flights = live.filter((u) => u.kind === 'flight');
-    const hostileShips = s.contacts.filter((c) => c.status !== 'destroyed' && c.kind === 'carrier' && s.t - c.seenT < 1800);
+    const foes = new Set(hostilesOf(this.world, this.side));
+    const hostileShips = s.contacts.filter((c) => c.status !== 'destroyed' && c.kind === 'carrier' && foes.has(c.side) && s.t - c.seenT < 1800);
     for (const w of wings) {
       const mine = flights.filter((f) => f.home === w.id);
       // CAP over carriers at DEFCON 3
@@ -156,7 +158,9 @@ export class RuleBrain {
   /** Assign remaining missiles and bombers to targets: counterforce first, then countervalue. */
   private fullStrike(s: Snapshot, live: Unit[], countervalue: boolean, leftovers = false): Command[] {
     const cmds: Command[] = [];
-    const contacts = s.contacts.filter((c) => c.status !== 'destroyed' && c.identified);
+    // only forces of hostile nations; neutrals are never targeted
+    const foes = new Set(hostilesOf(this.world, this.side));
+    const contacts = s.contacts.filter((c) => c.status !== 'destroyed' && c.identified && foes.has(c.side));
     const cf = [
       ...contacts.filter((c) => c.kind === 'silo'),
       ...contacts.filter((c) => c.kind === 'command'),
@@ -164,7 +168,8 @@ export class RuleBrain {
       ...contacts.filter((c) => c.kind === 'navalbase' || c.kind === 'radar'),
     ].map((c) => ({ id: c.id, lat: c.lat, lon: c.lon }));
     const hostiles = hostilesOf(this.world, this.side);
-    const cities = (countervalue ? hostiles.flatMap((h) => this.cityTargets(h)) : []).map((n) => ({ id: n, lat: NaN, lon: NaN }));
+    const cityPos = new Map((this.world?.cities ?? []).map((c) => [c.name.toLowerCase(), c]));
+    const cities = (countervalue ? hostiles.flatMap((h) => this.cityTargets(h)) : []).map((n) => ({ id: n, lat: cityPos.get(n)?.lat ?? NaN, lon: cityPos.get(n)?.lon ?? NaN }));
     const targets = leftovers ? [...cities, ...cf] : [...cf, ...cities];
     if (!targets.length) return cmds;
     let ti = 0;
@@ -174,7 +179,7 @@ export class RuleBrain {
       while (left > 0 && ti < targets.length * 3) {
         const t = targets[ti % targets.length];
         ti++;
-        if (u.kind === 'ssbn' && !Number.isNaN(t.lat) && distKm(u, t) > (u.rangeKm ?? 5000)) continue;
+        if (!Number.isNaN(t.lat) && distKm(u, t) > (u.rangeKm ?? 5000)) continue;
         const n = Math.min(left, u.kind === 'silo' ? 2 : 2);
         cmds.push({ op: 'launch', from: u.id, target: t.id, count: n });
         left -= n;
@@ -190,7 +195,7 @@ export class RuleBrain {
 
   /** Countervalue list for a faction: the classic lists, otherwise its largest cities in the scenario. */
   private cityTargets(f: Side): string[] {
-    if (CITY_TARGETS[f]) return CITY_TARGETS[f];
+    if (CITY_TARGETS[f] && (!this.world?.scenarioId || this.world.scenarioId === '1983')) return CITY_TARGETS[f];
     return (this.world?.cities ?? []).filter((c) => c.side === f).sort((a, b) => b.pop - a.pop).slice(0, 10).map((c) => c.name.toLowerCase());
   }
 }
