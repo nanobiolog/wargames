@@ -54,6 +54,25 @@ export function parseCommandLine(line: string): ParseResult {
       if (!m) return { kind: 'error', msg: 'usage: strike <bomber> at <target>' };
       return { kind: 'cmd', cmd: { op: 'strike', unit: m[1], target: strip(m[2]) } };
     }
+    case 'sortie':
+    case 'recon':
+    case 'cap':
+    case 'airstrike': {
+      // sortie <carrier|base> <recon|cap|strike> [to|at|over <place>] [x N]  ·  recon <carrier> [to] <place>  ·  cap <carrier> [over <place>]  ·  airstrike <carrier> at <target>
+      let rest = args;
+      let mission = verb === 'airstrike' ? 'strike' : verb === 'sortie' ? '' : verb;
+      const cnt = rest.match(/\s+x\s*(\d+)\s*$/i);
+      if (cnt) rest = rest.slice(0, cnt.index);
+      const parts = rest.trim().split(/\s+/);
+      const from = parts.shift();
+      if (!mission) mission = (parts.shift() ?? '').toLowerCase();
+      if (!from || !['recon', 'cap', 'strike'].includes(mission)) return { kind: 'error', msg: 'usage: sortie <carrier|fighter base> <recon|cap|strike> [to <place>] [x N]' };
+      if (/^(to|at|over|on|->)$/i.test(parts[0] ?? '')) parts.shift();
+      const to = parts.length ? strip(parts.join(' ')) : undefined;
+      if (mission === 'strike' && !to) return { kind: 'error', msg: 'usage: airstrike <carrier|fighter base> at <target> [x N]' };
+      if (mission === 'recon' && !to) return { kind: 'error', msg: 'usage: recon <carrier|fighter base> to <place> [x N]' };
+      return { kind: 'cmd', cmd: { op: 'sortie', from, mission: mission as 'recon' | 'cap' | 'strike', to, count: cnt ? +cnt[1] : undefined } };
+    }
     case 'recall': {
       if (!args) return { kind: 'error', msg: 'usage: recall <bomber>' };
       return { kind: 'cmd', cmd: { op: 'recall', unit: args.split(/\s+/)[0] } };
@@ -66,7 +85,9 @@ export function parseCommandLine(line: string): ParseResult {
     case 'hotline':
     case 'msg': {
       if (!args) return { kind: 'error', msg: 'usage: hotline <message>' };
-      return { kind: 'cmd', cmd: { op: 'hotline', text: args } };
+      // "hotline chn: text" sends to one faction; otherwise to every other faction
+      const to = args.match(/^@?([A-Za-z]{2,12}):\s*(.+)$/);
+      return { kind: 'cmd', cmd: to ? { op: 'hotline', to: to[1].toUpperCase(), text: to[2] } : { op: 'hotline', text: args } };
     }
     case 'speed': {
       const v = parseFloat(args.replace(/x$/i, ''));
@@ -92,6 +113,7 @@ export function describeCommand(c: Command): string {
     case 'scramble': return `SCRAMBLE ${c.count ?? 'ALL'} FROM ${c.base.toUpperCase()}${c.to ? ` TO ${c.to.toUpperCase()}` : ''}`;
     case 'strike': return `GO-CODE ${c.unit.toUpperCase()} → ${c.target.toUpperCase()}`;
     case 'recall': return `RECALL ${c.unit.toUpperCase()}`;
+    case 'sortie': return `${c.mission.toUpperCase()} SORTIE ${c.count ?? ''}${c.count ? ' ' : ''}FROM ${c.from.toUpperCase()}${c.to ? ` → ${c.to.toUpperCase()}` : ''}`;
     case 'move': return `MOVE ${c.unit.toUpperCase()} TO ${c.to.toUpperCase()}`;
     case 'speed': return `TIME x${c.value}`;
     case 'pause': return c.value === false ? 'RESUME' : 'PAUSE';

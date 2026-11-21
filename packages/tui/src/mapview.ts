@@ -300,7 +300,7 @@ export class MapView {
       for (const u of snap.units) {
         if (u.status === 'destroyed') continue;
         if (u.route?.length) this.pathLL([u, ...u.route], dim(sideColor(u.side), 0.55), 7, true);
-        else if (u.dest && u.kind === 'bomber') this.pathLL(gcPath(u, u.dest, 24), dim(u.status === 'enroute' ? C.warn : sideColor(u.side), 0.7), 7, true);
+        else if (u.dest && (u.kind === 'bomber' || u.kind === 'flight')) this.pathLL(gcPath(u, u.dest, 24), dim(u.status === 'enroute' ? C.warn : sideColor(u.side), 0.7), 7, true);
       }
     }
 
@@ -345,10 +345,10 @@ export class MapView {
     // ---- units
     const drawUnit = (u: Unit | Contact, own: boolean) => {
       const dead = u.status === 'destroyed';
-      if (dead && u.kind === 'bomber') return;
+      if (dead && (u.kind === 'bomber' || u.kind === 'flight')) return;
       const unknown = !own && !(u as Contact).identified;
       const col = dead ? dim(sideColor(u.side), 0.35) : unknown ? C.warn : sideColor(u.side);
-      const ch = dead ? '×' : unknown ? '◌' : u.kind === 'bomber' ? '↑↗→↘↓↙←↖'[Math.round((u.heading ?? 90) / 45) % 8] : KIND_GLYPH[u.kind];
+      const ch = dead ? '×' : unknown ? '◌' : u.kind === 'bomber' || u.kind === 'flight' ? '↑↗→↘↓↙←↖'[Math.round((u.heading ?? 90) / 45) % 8] : KIND_GLYPH[u.kind];
       const isSel = d.selected && (u.id === d.selected);
       const c = this.glyph(u.lat, u.lon, ch, isSel ? C.reticle : col, u.id, u.name, !dead);
       if (!c) return;

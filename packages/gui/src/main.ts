@@ -144,7 +144,7 @@ client.on('snap', (s: Snapshot) => {
   konsole.onSnapshot();
   // client-side movement history for tracks
   for (const u of [...s.units, ...s.contacts]) {
-    if (u.kind !== 'bomber' && u.kind !== 'carrier' && u.kind !== 'ssbn' && u.kind !== 'ssn') continue;
+    if (u.kind !== 'bomber' && u.kind !== 'flight' && u.kind !== 'carrier' && u.kind !== 'ssbn' && u.kind !== 'ssn') continue;
     if (u.status === 'destroyed') continue;
     const tr = st.trails.get(u.id) ?? [];
     const last = tr[tr.length - 1];

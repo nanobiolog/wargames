@@ -52,7 +52,7 @@ export function unitDetails(u: Unit | Contact, snap: Snapshot): DetailLine[] {
   if (isContact) {
     const c = u as Contact;
     out.push({ label: 'INTEL', value: `${c.identified ? 'IDENTIFIED' : 'UNIDENTIFIED'} · last seen ${fmtDuration(snap.t - c.seenT)} ago`, tone: 'dim' });
-    if (c.kind === 'bomber' || c.kind === 'carrier') {
+    if (c.kind === 'bomber' || c.kind === 'flight' || c.kind === 'carrier') {
       out.push({ label: 'NOTE', value: 'speed and destination unknown (enemy unit)', tone: 'dim' });
     }
   }
@@ -60,7 +60,12 @@ export function unitDetails(u: Unit | Contact, snap: Snapshot): DetailLine[] {
     out.push({ label: 'MISSILES', value: `${x.missiles}${x.missilesMax ? `/${x.missilesMax}` : ''} × ${x.warheads ?? 1} RV × ${x.yieldKt} KT` });
     if (x.rangeKm) out.push({ label: 'RANGE', value: `${x.rangeKm.toLocaleString('en-US')} KM` });
   }
-  if (x.aircraft !== undefined && u.kind !== 'bomber') out.push({ label: 'AIRCRAFT', value: `${x.aircraft} × ${x.bombs ?? 0} weapons${x.tankers !== undefined ? ` · ${x.tankers} tankers` : ''}` });
+  if (u.kind === 'flight' && !isContact) {
+    const fuel = x.fuel ?? 0;
+    out.push({ label: 'MISSION', value: `${(x.mission ?? '').toUpperCase()} · ${x.aircraft} aircraft${x.target ? ` → ${x.target.toUpperCase()}` : ''}` });
+    out.push({ label: 'FUEL', value: `${Math.round(fuel * 100)}% · ~${Math.round(fuel * (x.rangeKm ?? 3200)).toLocaleString('en-US')} KM left`, tone: fuel < 0.25 ? 'bad' : fuel < 0.45 ? 'warn' : undefined });
+  }
+  if (x.aircraft !== undefined && u.kind !== 'bomber' && u.kind !== 'flight') out.push({ label: 'AIRCRAFT', value: `${x.aircraft} × ${x.bombs ?? 0} weapons${x.tankers !== undefined ? ` · ${x.tankers} tankers` : ''}` });
   if (x.interceptors !== undefined) out.push({ label: 'INTERCEPTORS', value: `${x.interceptors}${x.defenceKm ? ` · radius ${x.defenceKm} KM` : ''}` });
   if (x.radarKm) out.push({ label: 'RADAR', value: `${x.radarKm.toLocaleString('en-US')} KM` });
 
@@ -116,4 +121,33 @@ export function selectionDetails(id: string, snap: Snapshot): { title: string; l
   const u = snap.units.find((x) => x.id === id) ?? snap.contacts.find((x) => x.id === id);
   if (u) return { title: `${u.name} [${u.id.toUpperCase()}]`, lines: unitDetails(u, snap) };
   return null;
+}
+
+/**
+ * The intelligence picture for the `intel` console command: every known contact grouped by kind,
+ * with how long ago it was last seen and whether it is identified.
+ */
+export function intelReport(s: Snapshot): string[] {
+  const out: string[] = [];
+  const groups: [string, string[]][] = [
+    ['SURFACE GROUPS', ['carrier']], ['SUBMARINES', ['ssbn', 'ssn']], ['BOMBERS', ['bomber']], ['AIR FLIGHTS', ['flight']],
+    ['FIXED SITES', ['silo', 'airbase', 'afb_int', 'radar', 'abm', 'command', 'navalbase']],
+  ];
+  const live = s.contacts.filter((c) => c.status !== 'destroyed');
+  for (const [label, kinds] of groups) {
+    const cs = live.filter((c) => kinds.includes(c.kind)).sort((a, b) => b.seenT - a.seenT);
+    if (!cs.length) continue;
+    out.push(`${label} (${cs.length})`);
+    for (const c of label === 'FIXED SITES' ? [] : cs.slice(0, 20)) {
+      const age = Math.max(0, s.t - c.seenT);
+      out.push(`  ${c.id.padEnd(18)} ${(c.identified ? c.cls : 'UNIDENTIFIED').slice(0, 22).padEnd(22)} ${c.side.padEnd(5)} ${fmtLatLon(c)}  seen ${age < 60 ? 'now' : `${fmtDuration(age)} ago`}`);
+    }
+  }
+  const sorties = s.units.filter((u) => u.kind === 'flight' && u.status !== 'destroyed');
+  if (sorties.length) {
+    out.push(`OWN FLIGHTS (${sorties.length})`);
+    for (const f of sorties) out.push(`  ${f.id.padEnd(18)} ${(f.mission ?? '').toUpperCase().padEnd(7)} ${f.status.toUpperCase().padEnd(10)} ${f.aircraft} a/c  fuel ${Math.round((f.fuel ?? 0) * 100)}%`);
+  }
+  if (!out.length) out.push('NO CONTACTS. Launch a recon sortie: recon <carrier> to <place>');
+  return out;
 }

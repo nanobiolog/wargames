@@ -1,5 +1,5 @@
 import {
-  GameClient, parseCommandLine, describeCommand, DEFCON_NAMES, KIND_LABEL, PALETTE, suggest, helpLines, selectionDetails, ballisticPos as bpos,
+  GameClient, parseCommandLine, describeCommand, DEFCON_NAMES, KIND_LABEL, PALETTE, suggest, helpLines, selectionDetails, ballisticPos as bpos, intelReport,
   type Suggestion,
   distKm, fmtLatLon, ballisticPos, normLon, SPEED_STEPS,
   type GameEvent, type Side, type Unit, type Contact, type PlanProposal, type Snapshot, type Command, type Focus,
@@ -483,6 +483,11 @@ export class TuiApp {
         this.map.centerOn(u.lat, u.lon, Math.max(this.map.zoom, 6));
         if (this.sync) this.client.focus({ lat: u.lat, lon: u.lon, zoom: Math.max(this.map.zoom, 6), unit: u.id, label: u.name });
         return this.sys(this.describeUnit(u).join('\n'), COL.magenta);
+      }
+      case 'intel': {
+        if (!this.client.snap) return;
+        for (const l of intelReport(this.client.snap)) this.sys(l, l.startsWith(" ") ? COL.text : COL.dim);
+        return;
       }
       case 'list': {
         const s = this.client.snap;

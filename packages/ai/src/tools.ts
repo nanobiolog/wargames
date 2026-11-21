@@ -72,9 +72,27 @@ export const GAME_TOOLS: ToolSpec[] = [
     },
   },
   {
+    name: 'air_sortie',
+    description: 'Launch jets from one of your carrier groups or fighter bases. recon (any DEFCON): search ~350 km around a point and identify ships and aircraft. cap (DEFCON 4 or lower): combat air patrol that shoots down hostile bombers and recon flights at DEFCON 3. strike (DEFCON 2): conventional raid on an enemy ship group or base. Aircraft sent away no longer defend the group. Combat radius 1500 km.',
+    parameters: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'your carrier group or fighter base id, e.g. cvbg-midway' },
+        mission: { type: 'string', description: 'recon | cap | strike', enum: ['recon', 'cap', 'strike'] },
+        to: { type: 'string', description: 'place, sea area, "lat,lon", or (strike) an enemy unit id; cap defaults to over the carrier' },
+        count: { type: 'integer', description: 'aircraft (default recon 2, cap 4, strike 8)', minimum: 1, maximum: 40 },
+      },
+      required: ['from', 'mission'],
+    },
+  },
+  {
     name: 'hotline_message',
-    description: 'Send a message to the other side over the direct communications link (the hotline). Use it to signal intent, warn, or negotiate.',
-    parameters: { type: 'object', properties: { text: { type: 'string', description: 'message text (max 600 chars)' } }, required: ['text'] },
+    description: 'Send a message over the direct communications link (the hotline). Use it to signal intent, warn, or negotiate. Without "to" it goes to every other nation.',
+    parameters: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'message text (max 600 chars)' }, to: { type: 'string', description: 'optional faction id to address only them, e.g. USSR, CHN' } },
+      required: ['text'],
+    },
   },
   {
     name: 'hold',
@@ -95,7 +113,12 @@ export function toolCallToCommand(c: ToolCall): Command | null {
     case 'bomber_strike': return { op: 'strike', unit: str(a.group), target: str(a.target) };
     case 'recall_bombers': return { op: 'recall', unit: str(a.group) };
     case 'move_unit': return { op: 'move', unit: str(a.unit), to: str(a.destination) };
-    case 'hotline_message': return { op: 'hotline', text: str(a.text).slice(0, 600) };
+    case 'air_sortie': {
+      const m = str(a.mission).toLowerCase();
+      if (m !== 'recon' && m !== 'cap' && m !== 'strike') return null;
+      return { op: 'sortie', from: str(a.from), mission: m, to: a.to ? str(a.to) : undefined, count: int(a.count) };
+    }
+    case 'hotline_message': return { op: 'hotline', text: str(a.text).slice(0, 600), to: a.to ? str(a.to).toUpperCase() : undefined };
     case 'hold': return { op: 'hold', note: a.reason ? str(a.reason).slice(0, 300) : undefined };
     default: return null;
   }

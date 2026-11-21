@@ -24,7 +24,7 @@ export type LayerKey =
 /** Service-branch filters: which unit kinds each branch layer controls. */
 export const BRANCH_KINDS: Record<'navy' | 'air' | 'rocket' | 'ground', string[]> = {
   navy: ['carrier', 'ssbn', 'ssn', 'navalbase'],
-  air: ['airbase', 'afb_int', 'bomber'],
+  air: ['airbase', 'afb_int', 'bomber', 'flight'],
   rocket: ['silo', 'abm'],
   ground: ['command', 'radar'],
 };
@@ -82,6 +82,11 @@ const ICONS: Record<string, Pt[][]> = {
     [[0, -0.6], [0, 0.4]],
   ],
   // airborne bomber group (rotated to heading; nose = +x)
+  // air flight: a pair of small swept-wing jets (drawn pointing east, rotated to heading)
+  flight: [
+    [[-0.9, -0.55], [0.2, -0.55]], [[-0.35, -1.0], [0.0, -0.55], [-0.35, -0.1]], [[-0.85, -0.75], [-0.85, -0.35]],
+    [[-0.5, 0.55], [0.6, 0.55]], [[0.05, 0.1], [0.4, 0.55], [0.05, 1.0]], [[-0.45, 0.35], [-0.45, 0.75]],
+  ],
   bomber: [
     [[-1.3, 0], [1.4, 0]], [[1.4, 0], [1.6, 0]],
     [[0.35, -0.08], [-0.55, -1.4], [-0.85, -1.4], [-0.25, -0.08]], [[0.35, 0.08], [-0.55, 1.4], [-0.85, 1.4], [-0.25, 0.08]],
@@ -201,6 +206,7 @@ export function buildWorld(b: DynBatch, st: SceneState) {
     for (const u of snap.units) {
       if (u.status === 'destroyed') continue;
       if (u.route?.length) polyLL(b, [u, ...u.route], dimC(sideCol(u.side), 0.5), lw, 2);
+      else if (u.dest && u.kind === 'flight') polyLL(b, gcPath(u, u.dest, 24), (u as Unit).mission === 'strike' ? COL.yellow : dimC(sideCol(u.side), 0.5), lw, 2);
       else if (u.dest && u.kind === 'bomber') polyLL(b, gcPath(u, u.dest, 32), u.status === 'enroute' ? COL.yellow : dimC(sideCol(u.side), 0.55), lw, 2);
     }
   }
@@ -236,7 +242,7 @@ export function buildWorld(b: DynBatch, st: SceneState) {
   const showUnit = (u: Unit | Contact, own: boolean) => {
     if (!branchVisible(L, u.kind)) return;
     const dead = u.status === 'destroyed';
-    if (dead && u.kind === 'bomber') return;
+    if (dead && (u.kind === 'bomber' || u.kind === 'flight')) return;
     const unknown = !own && !(u as Contact).identified;
     let col = unknown ? COL.unknown : sideCol(u.side);
     if (dead) col = dimC(col, 0.3);
@@ -244,7 +250,7 @@ export function buildWorld(b: DynBatch, st: SceneState) {
     const size = (u.kind === 'carrier' || u.kind === 'ssbn' || u.kind === 'ssn' ? 6.8 : u.kind === 'bomber' ? 7 : 7) * dpr;
     const hdg = u.heading ?? 90;
     // bombers and carriers turn to their heading; submarines (side view) just face east or west
-    const rot = u.kind === 'bomber' || (u.kind === 'carrier' && u.status === 'moving') ? ((hdg - 90) * Math.PI) / 180 : 0;
+    const rot = u.kind === 'bomber' || u.kind === 'flight' || (u.kind === 'carrier' && u.status === 'moving') ? ((hdg - 90) * Math.PI) / 180 : 0;
     const mirror = (u.kind === 'ssbn' || u.kind === 'ssn' || u.kind === 'carrier') && rot === 0 && u.status === 'moving' && hdg > 180;
     icon(b, u.lat, u.lon, unknown ? 'unknown' : u.kind, col, size, lw * 0.9, rot, mirror);
     if (dead) {
@@ -363,7 +369,7 @@ export function buildPanelLabels(b: DynBatch, st: SceneState, xf: Xform, focusLa
   // reserve space for unit icons first
   const units: (Unit | Contact)[] = snap ? [...snap.units, ...snap.contacts] : [];
   for (const u of units) {
-    if (u.status === 'destroyed' && u.kind === 'bomber') continue;
+    if (u.status === 'destroyed' && (u.kind === 'bomber' || u.kind === 'flight')) continue;
     if (!branchVisible(L, u.kind)) continue;
     const own = st.role === 'SPECTATOR' || u.side === st.role || snap!.units.includes(u as Unit);
     if ((own && !L.units) || (!own && !L.contacts)) continue;
@@ -419,7 +425,7 @@ export function buildPanelLabels(b: DynBatch, st: SceneState, xf: Xform, focusLa
   if (snap) {
     const unitLabelSpan = 70;
     for (const u of units) {
-      if (u.id === st.selected || (u.status === 'destroyed' && u.kind === 'bomber') || !branchVisible(L, u.kind)) continue;
+      if (u.id === st.selected || (u.status === 'destroyed' && (u.kind === 'bomber' || u.kind === 'flight')) || !branchVisible(L, u.kind)) continue;
       const important = u.kind === 'silo' || u.kind === 'carrier' || u.kind === 'ssbn' || u.kind === 'bomber' || u.kind === 'airbase';
       if (span > unitLabelSpan && !(span < 160 && important && u.side === st.role)) continue;
       const unknown = 'identified' in u && !u.identified;

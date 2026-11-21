@@ -5,6 +5,8 @@ export type ArgKind =
   | 'launcher' // own silo field / SSBN with missiles
   | 'airbase' // own bomber base with aircraft
   | 'bomber' // own airborne bomber group
+  | 'airwing' // own carrier or fighter base with aircraft
+  | 'mission' // recon | cap | strike
   | 'mobile' // own ship / sub / bomber group
   | 'ownunit' // any own unit
   | 'unit' // any own unit or known contact
@@ -61,6 +63,18 @@ export const COMMANDS: CommandSpec[] = [
     args: [S('launcher', 'silo|ssbn'), K('at'), S('target', 'target', { multi: true }), K('x', true), S('count', 'N', { optional: true })],
   },
   {
+    verb: 'sortie', aliases: ['recon', 'cap', 'airstrike'], scope: 'game', group: 'ORDERS',
+    syntax: 'sortie <carrier|fighter base> <recon|cap|strike> [to <place|target>] [x N]',
+    summary: 'fly jets from a carrier or fighter base: reconnaissance, air patrol or a strike',
+    details: 'Draws aircraft from the carrier group\'s or base\'s fighters (which also defend it, so the group is weaker while they are away). ' +
+      'RECON (any DEFCON, default 2 aircraft) flies to a point, searches ~350 km around it for 20 game-minutes, identifies ships, bombers and other flights, and reports. ' +
+      'CAP, combat air patrol (DEFCON 4 or lower, default 4), orbits a point (default: over the carrier), shadows intruders and at DEFCON 3 shoots down hostile bombers and recon flights. ' +
+      'STRIKE (DEFCON 2, default 8) is a conventional raid on a ship group or base; the target\'s air defence shoots some aircraft down. ' +
+      'Flights come home when fuel runs low; recall brings them back early. Shortcuts: recon <carrier> to <place>, cap <carrier> [over <place>], airstrike <carrier> at <target>.',
+    examples: ['recon cvbg-midway to sea of okhotsk', 'cap cvbg-eisenhower', 'airstrike cvbg-americas at sag-kirov x 10', 'sortie afb-elmendorf recon to bering sea'],
+    args: [S('airwing', 'carrier'), S('mission', 'recon|cap|strike'), K('to', true), S('target', 'place', { multi: true, optional: true })],
+  },
+  {
     verb: 'scramble', scope: 'game', group: 'ORDERS', syntax: 'scramble <base> [N] [to <place>]',
     summary: 'launch bombers to a holding orbit',
     details: 'Sends N bombers (default: all) from a bomber base to a fail-safe orbit. Without "to", they fly to a default point toward the enemy. They wait there for a go-code (strike) and return home when fuel runs low; a tanker extends their time once. Requires DEFCON 3.',
@@ -74,7 +88,7 @@ export const COMMANDS: CommandSpec[] = [
     examples: ['strike bmr-loring-1 at murmansk'], args: [S('bomber', 'group'), K('at'), S('target', 'target', { multi: true })],
   },
   {
-    verb: 'recall', scope: 'game', group: 'ORDERS', syntax: 'recall <bomber-group>',
+    verb: 'recall', scope: 'game', group: 'ORDERS', syntax: 'recall <bomber-group|flight>',
     summary: 'bring a bomber group home', details: 'Cancels an orbit or a strike that has not arrived yet; the aircraft return to base and can be scrambled again.',
     examples: ['recall bmr-loring-1'], args: [S('bomber', 'group')],
   },
@@ -133,6 +147,11 @@ export const COMMANDS: CommandSpec[] = [
   {
     verb: 'list', scope: 'console', group: 'INFO', syntax: 'list [kind|enemy]', summary: 'list your units or known enemy contacts',
     details: 'Kinds: silo, ssbn, ssn, carrier, airbase, bomber, afb_int, radar, abm, command, navalbase.', examples: ['list silo', 'list enemy'], args: [S('kind', 'kind', { optional: true })],
+  },
+  {
+    verb: 'intel', scope: 'console', group: 'INFO', syntax: 'intel', summary: 'what your radars, satellites and recon flights are tracking',
+    details: 'Every known contact grouped by type (surface groups, submarines, bombers, air flights, fixed sites), when it was last seen and whether it is identified, plus your own flights in the air. Radars track aircraft and ships near the coast, satellites pass every 20 minutes, and recon sorties identify everything within ~350 km.',
+    examples: ['intel'], args: [],
   },
   { verb: 'info', scope: 'console', group: 'INFO', syntax: 'info [unit|missile]', summary: 'details of the selected (or named) unit or missile', details: '', examples: ['info', 'info bmr-loring-1'], args: [S('unit', 'unit', { optional: true })] },
   { verb: 'help', aliases: ['?'], scope: 'console', group: 'INFO', syntax: 'help [command]', summary: 'list commands, or explain one in detail', details: '', examples: ['help', 'help launch'], args: [S('command', 'command', { optional: true })] },

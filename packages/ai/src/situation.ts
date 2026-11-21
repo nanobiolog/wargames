@@ -50,7 +50,7 @@ export function situationReport(side: Side, s: Snapshot, world: StaticWorld | un
   const byKind = new Map<string, string[]>();
   for (const c of s.contacts) {
     if (c.status === 'destroyed') continue;
-    const mobile = c.kind === 'bomber' || c.kind === 'carrier' || c.kind === 'ssbn' || c.kind === 'ssn';
+    const mobile = c.kind === 'bomber' || c.kind === 'flight' || c.kind === 'carrier' || c.kind === 'ssbn' || c.kind === 'ssn';
     const entry = mobile ? `${c.id}(${c.cls} ${fmtLatLon(c)} seen ${Math.round((s.t - c.seenT) / 60)}m ago)` : c.id;
     byKind.set(c.kind, [...(byKind.get(c.kind) ?? []), entry]);
   }

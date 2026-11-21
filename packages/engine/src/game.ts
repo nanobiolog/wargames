@@ -114,8 +114,29 @@ function places() {
   return (sharedPlaces ??= loadPlaces());
 }
 
-const FIXED_KINDS = new Set(['silo', 'airbase', 'afb_int', 'radar', 'abm', 'command', 'navalbase']);
+/** status check that TypeScript won't narrow away (units die mid-loop) */
+const gone = (u: Unit) => u.status === 'destroyed';
+const FIXED_LIST = ['silo', 'airbase', 'afb_int', 'radar', 'abm', 'command', 'navalbase'];
+const FIXED_KINDS = new Set(FIXED_LIST);
 const SHIP_KINDS = new Set(['carrier', 'ssbn', 'ssn']);
+
+/** Air flights from carriers / fighter bases. */
+const FLIGHT = {
+  speed: { recon: 950, cap: 900, strike: 850 } as Record<string, number>,
+  /** km of flying on a full tank (out, loiter and back) */
+  rangeKm: 3200,
+  maxRadiusKm: 1500,
+  reconRadiusKm: 350,
+  reconLoiterSec: 1200,
+  capRadiusKm: 300,
+  defaults: { recon: 2, cap: 4, strike: 8 } as Record<string, number>,
+};
+/** Surface groups exchange anti-ship missiles inside this range (DEFCON 2, contact held). */
+const SURFACE_RANGE_KM = 300;
+/** Coastal radars see surface ships out to this range. */
+const RADAR_SEA_KM = 400;
+/** Intelligence summary interval per faction (game seconds). */
+const INTEL_SUMMARY_SEC = 1800;
 
 const BOMBER_SPEED: Record<string, number> = { 'B-52G': 840, 'B-52H': 840, 'FB-111A': 1000, 'TU-95': 750, 'TU-95K': 750, 'M-4 / 3M': 800 };
 const BOMBER_RANGE: Record<string, number> = { 'FB-111A': 6500 };
@@ -360,9 +381,22 @@ export class Game {
         return { ok: true, msg: `${u.id} ATTACKING ${tgt.name}${need > have ? ' — INSUFFICIENT FUEL TO RETURN' : ''}` };
       }
 
+      case 'sortie':
+        return this.sortie(side, cmd);
+
       case 'recall': {
         const u = this.resolveOwn(side, cmd.unit);
         if (typeof u === 'string') return { ok: false, msg: u };
+        if (u.kind === 'flight' && u.status !== 'destroyed') {
+          const home = this.flightHome(u);
+          if (!home) return { ok: false, msg: 'NO FRIENDLY CARRIER OR FIGHTER BASE IN RANGE' };
+          u.status = 'returning';
+          u.home = home.id;
+          u.dest = { lat: home.lat, lon: home.lon };
+          u.target = null;
+          u.targetPos = null;
+          return { ok: true, msg: `${u.id} RETURNING TO ${home.name}` };
+        }
         if (u.kind !== 'bomber' || u.status === 'destroyed') return { ok: false, msg: `${u.id} IS NOT AN AIRBORNE BOMBER GROUP` };
         const home = this.homeFor(u);
         if (!home) return { ok: false, msg: 'NO FRIENDLY AIRFIELD AVAILABLE' };
@@ -429,6 +463,159 @@ export class Game {
       case 'hold':
         return { ok: true, msg: 'HOLDING' };
     }
+  }
+
+  // ================================================================== air operations
+
+  private sortie(side: Side, cmd: Extract<Command, { op: 'sortie' }>): CommandResult {
+    const s = this.s;
+    const base = this.resolveOwn(side, cmd.from);
+    if (typeof base === 'string') return { ok: false, msg: base };
+    if (base.kind !== 'carrier' && base.kind !== 'afb_int') return { ok: false, msg: `${base.id} HAS NO FIGHTERS — USE A CARRIER GROUP OR FIGHTER BASE` };
+    if (base.status === 'destroyed') return { ok: false, msg: `${base.id} IS DESTROYED` };
+    const m = cmd.mission;
+    const need = m === 'strike' ? 2 : m === 'cap' ? 4 : 5;
+    if (s.defcon[side] > need) return { ok: false, msg: `${m.toUpperCase()} SORTIES REQUIRE DEFCON ${need} (NOW ${s.defcon[side]})` };
+    const avail = base.interceptors ?? 0;
+    const n = Math.min(avail, cmd.count ?? FLIGHT.defaults[m]);
+    if (n <= 0) return { ok: false, msg: `NO AIRCRAFT AVAILABLE ON ${base.id}` };
+    let dest: LatLon, label: string, target: Target | undefined;
+    if (m === 'strike') {
+      const t = this.resolveTarget(side, cmd.to ?? '');
+      if (typeof t === 'string') return { ok: false, msg: t };
+      if (t.cityId) return { ok: false, msg: 'CONVENTIONAL STRIKES ARE FLOWN AGAINST MILITARY TARGETS ONLY (SHIPS, BASES, RADARS)' };
+      target = t;
+      dest = t.pos;
+      label = t.name;
+    } else if (cmd.to) {
+      const t = this.resolvePlace(side, cmd.to);
+      if (typeof t === 'string') return { ok: false, msg: t };
+      dest = t.pos;
+      label = t.name;
+    } else {
+      dest = { lat: base.lat, lon: base.lon };
+      label = `OVER ${base.name}`;
+    }
+    const d = distKm(base, dest);
+    if (d > FLIGHT.maxRadiusKm) return { ok: false, msg: `${label} IS ${Math.round(d)} KM AWAY — COMBAT RADIUS ${FLIGHT.maxRadiusKm} KM` };
+    base.interceptors = avail - n;
+    const id = `${m === 'recon' ? 'rec' : m === 'cap' ? 'cap' : 'stk'}-${base.id.replace(/^[a-z]+-/, '')}-${(s.counters[`f:${base.id}`] = (s.counters[`f:${base.id}`] ?? 0) + 1)}`;
+    const f: Unit = {
+      id, name: `${m.toUpperCase()} ${id.split('-').pop()} (${base.name.split(' ')[0]})`, side, kind: 'flight', cls: base.kind === 'carrier' ? 'CARRIER AIR WING' : base.cls,
+      lat: base.lat, lon: base.lon, status: m === 'strike' ? 'enroute' : 'moving', hp: 1, aircraft: n, mission: m,
+      speedKmh: FLIGHT.speed[m], rangeKm: FLIGHT.rangeKm, fuel: 1, dest, home: base.id, heading: bearing(base, dest),
+      target: target?.unitId ?? null, targetPos: target ? target.pos : null,
+    };
+    s.units.push(f);
+    this.unitIdx.set(id, f);
+    const what = m === 'recon' ? `RECONNAISSANCE OF ${label}` : m === 'cap' ? `COMBAT AIR PATROL ${label.startsWith('OVER') ? label : `OVER ${label}`}` : `STRIKE ON ${label}`;
+    this.emit({ kind: 'info', visibleTo: [side], side, text: `${id.toUpperCase()}: ${n} AIRCRAFT LAUNCHED FROM ${base.name} — ${what}`, lat: base.lat, lon: base.lon });
+    return { ok: true, msg: `${n} AIRCRAFT AIRBORNE AS ${id} — ${what} (${Math.round(d)} KM)` };
+  }
+
+  /** Where a flight recovers: its own carrier/base, else the nearest friendly one with deck/runway in range. */
+  private flightHome(f: Unit): Unit | undefined {
+    const home = this.unit(f.home ?? '');
+    if (home && home.status !== 'destroyed') return home;
+    let best: Unit | undefined, bd = Infinity;
+    for (const b of this.s.units) {
+      if (!this.friendly(b.side, f.side) || (b.kind !== 'carrier' && b.kind !== 'afb_int') || b.status === 'destroyed') continue;
+      const d = distKm(f, b);
+      if (d < bd) { bd = d; best = b; }
+    }
+    return best && bd <= (f.fuel ?? 0) * (f.rangeKm ?? FLIGHT.rangeKm) ? best : undefined;
+  }
+
+  private flightLogic(f: Unit, arrived: boolean) {
+    const s = this.s;
+    const home = this.flightHome(f);
+    const fuelKm = (f.fuel ?? 0) * (f.rangeKm ?? FLIGHT.rangeKm);
+    if ((f.fuel ?? 0) <= 0) {
+      this.lose(f, null, `${f.id.toUpperCase()} LOST — FUEL EXHAUSTED`);
+      return;
+    }
+    // the carrier keeps moving: steer for where it is now
+    if (f.status === 'returning' && home) f.dest = { lat: home.lat, lon: home.lon };
+    if (f.status === 'returning' && arrived) {
+      if (home && distKm(f, home) < 30) {
+        home.interceptors = (home.interceptors ?? 0) + (f.aircraft ?? 0);
+        this.emit({ kind: 'info', visibleTo: [f.side], side: f.side, text: `${f.id.toUpperCase()} RECOVERED ON ${home.name} (${f.aircraft} AIRCRAFT)` });
+        f.status = 'destroyed';
+        f.hp = 0;
+        f.aircraft = 0;
+      }
+      return;
+    }
+    // bingo fuel: head home with a margin
+    if (f.status !== 'returning' && home && fuelKm < distKm(f, home) * 1.15 + 150) {
+      f.status = 'returning';
+      f.home = home.id;
+      f.dest = { lat: home.lat, lon: home.lon };
+      f.target = null;
+      f.targetPos = null;
+      this.emit({ kind: 'info', visibleTo: [f.side], side: f.side, text: `${f.id.toUpperCase()} BINGO FUEL — RETURNING TO ${home.name}` });
+      return;
+    }
+    if (f.status === 'moving' && arrived) {
+      f.status = 'orbit';
+      f.dest = null;
+      if (f.mission === 'recon') f.loiterUntil = s.t + FLIGHT.reconLoiterSec;
+      this.emit({ kind: 'info', visibleTo: [f.side], side: f.side, text: `${f.id.toUpperCase()} ON STATION ${fmtLatLon(f)}${f.mission === 'recon' ? ' — SEARCHING' : ' — PATROLLING'}` });
+    } else if (f.status === 'orbit' && f.mission === 'recon' && s.t >= (f.loiterUntil ?? 0) && home) {
+      f.status = 'returning';
+      f.dest = { lat: home.lat, lon: home.lon };
+      this.emit({ kind: 'info', visibleTo: [f.side], side: f.side, text: `${f.id.toUpperCase()} SEARCH COMPLETE — RETURNING` });
+    } else if (f.status === 'enroute') {
+      // strike: follow a moving target we still hold a contact on
+      const tgt = f.target ? this.unit(f.target) : undefined;
+      if (tgt && tgt.status !== 'destroyed' && s.intel[f.side].contacts[tgt.id]) f.dest = { lat: tgt.lat, lon: tgt.lon };
+      if (arrived || (tgt && distKm(f, tgt) < 25)) this.airStrike(f, tgt);
+    }
+  }
+
+  /** Conventional raid: the target's air defence takes its toll, survivors hit ships hard and bases moderately. */
+  private airStrike(f: Unit, tgt: Unit | undefined) {
+    const s = this.s;
+    let n = f.aircraft ?? 0;
+    const defended = tgt && tgt.status !== 'destroyed' ? tgt : undefined;
+    let lost = 0;
+    if (defended && ((defended.interceptors ?? 0) > 0 || defended.kind === 'carrier' || (defended.defenceKm ?? 0) > 0)) {
+      const p = Math.min(0.55, 0.12 + 0.012 * (defended.interceptors ?? 0) + (defended.kind === 'carrier' ? 0.1 : 0));
+      for (let i = 0; i < n; i++) if (this.rng.chance(p)) lost++;
+      n -= lost;
+      f.aircraft = n;
+    }
+    let result = 'NO TARGET AT THE STRIKE POINT';
+    if (defended && n > 0) {
+      const per = defended.kind === 'carrier' ? 0.11 : ['silo', 'command', 'abm'].includes(defended.kind) ? 0.015 : 0.07;
+      let dmg = 0;
+      for (let i = 0; i < n; i++) dmg += per * this.rng.range(0.5, 1.2);
+      defended.hp = Math.max(0, defended.hp - dmg);
+      if (defended.hp <= 0) {
+        this.destroy(defended, f.side);
+        result = `${defended.name} DESTROYED`;
+      } else {
+        defended.status = defended.kind === 'carrier' ? defended.status : 'damaged';
+        result = `${defended.name} HIT — ${Math.round((1 - defended.hp) * 100)}% DAMAGE`;
+      }
+      s.tension = Math.min(100, s.tension + 6);
+    }
+    const tside = defended?.side;
+    this.emit({ kind: 'impact', visibleTo: tside ? [f.side, tside] : [f.side], text: `${f.id.toUpperCase()} STRIKE: ${result}${lost ? ` · ${lost} AIRCRAFT LOST` : ''}`, lat: f.lat, lon: f.lon });
+    if (n <= 0) { this.lose(f, tside ?? null, `${f.id.toUpperCase()} — ALL AIRCRAFT LOST`); return; }
+    const home = this.flightHome(f);
+    f.status = home ? 'returning' : 'orbit';
+    f.dest = home ? { lat: home.lat, lon: home.lon } : null;
+    f.target = null;
+    f.targetPos = null;
+  }
+
+  /** Remove an air group (fuel, shoot-down, ditching). */
+  private lose(f: Unit, by: Side | null, text: string) {
+    f.status = 'destroyed';
+    f.hp = 0;
+    f.aircraft = 0;
+    this.emit({ kind: 'destroyed', visibleTo: by ? [f.side, by] : [f.side], side: f.side, text, lat: f.lat, lon: f.lon });
   }
 
   private startRoute(u: Unit, route: LatLon[], name: string) {
@@ -621,6 +808,11 @@ export class Game {
         this.bomberLogic(u, arrived);
         continue;
       }
+      if (u.kind === 'flight') {
+        u.fuel = (u.fuel ?? 1) - km / (u.rangeKm ?? FLIGHT.rangeKm);
+        this.flightLogic(u, arrived);
+        continue;
+      }
       if (arrived) {
         if (u.route && u.route.length > 1) {
           u.route.shift();
@@ -632,6 +824,12 @@ export class Game {
           this.emit({ kind: 'info', visibleTo: [u.side], side: u.side, text: `${u.id.toUpperCase()} ON STATION ${fmtLatLon(u)}` });
         }
       }
+    }
+    // flights on station burn fuel and run their mission clock
+    for (const u of s.units) {
+      if (u.kind !== 'flight' || u.status !== 'orbit') continue;
+      u.fuel = (u.fuel ?? 1) - (0.45 * (u.speedKmh ?? 900) * dt) / 3600 / (u.rangeKm ?? FLIGHT.rangeKm);
+      this.flightLogic(u, false);
     }
     // orbiting bombers burn fuel slowly
     for (const u of s.units) {
@@ -835,19 +1033,63 @@ export class Game {
   private combat(dt: number) {
     const s = this.s;
     const perMin = dt / 60;
+    // everything that can shoot at aircraft (bases and carriers with fighters, CAP flights), in unit order
+    const defenders = s.units.filter((d) => d.status !== 'destroyed' && (d.kind === 'afb_int' || d.kind === 'carrier' || (d.kind === 'flight' && d.mission === 'cap')));
     for (const b of s.units) {
       if (b.kind !== 'bomber' || b.status === 'destroyed') continue;
-      for (const d of s.units) {
+      for (const d of defenders) {
         if (!this.hostile(d.side, b.side) || d.status === 'destroyed') continue;
-        if ((d.kind !== 'afb_int' && d.kind !== 'carrier') || !(d.interceptors ?? 0)) continue;
-        if (distKm(b, d) > (d.defenceKm ?? 500)) continue;
+        const cap = d.kind === 'flight' && d.mission === 'cap' && (d.aircraft ?? 0) > 0;
+        if (!cap && ((d.kind !== 'afb_int' && d.kind !== 'carrier') || !(d.interceptors ?? 0))) continue;
+        if (distKm(b, d) > (cap ? FLIGHT.capRadiusKm : d.defenceKm ?? 500)) continue;
         if (s.defcon[d.side] > 3 && b.status !== 'enroute') continue; // peacetime: escort, don't shoot
         if (this.rng.chance(0.22 * perMin)) {
           b.aircraft = (b.aircraft ?? 0) - 1;
           s.score[b.side].forcesLost += b.bombs ?? 0;
-          if (this.rng.chance(0.25)) d.interceptors = (d.interceptors ?? 0) - 1;
+          if (this.rng.chance(0.25)) {
+            if (cap) { d.aircraft = (d.aircraft ?? 0) - 1; if (!d.aircraft) this.lose(d, b.side, `${d.id.toUpperCase()} — LAST FIGHTER LOST`); }
+            else d.interceptors = (d.interceptors ?? 0) - 1;
+          }
           this.emit({ kind: 'intercept', visibleTo: [b.side, d.side], text: `${d.name.split(' ')[0]} INTERCEPTORS DOWN 1 ${b.cls} (${b.id.toUpperCase()})`, lat: b.lat, lon: b.lon });
           if ((b.aircraft ?? 0) <= 0) this.destroy(b, d.side);
+        }
+      }
+    }
+    // hostile air defence vs air flights: strikes are always engaged, recon / CAP from DEFCON 3
+    for (const f of s.units) {
+      if (f.kind !== 'flight' || f.status === 'destroyed' || !(f.aircraft ?? 0)) continue;
+      for (const d of defenders) {
+        if (gone(f) || !this.hostile(d.side, f.side) || d.status === 'destroyed') continue;
+        const cap = d.kind === 'flight' && d.mission === 'cap' && (d.aircraft ?? 0) > 0;
+        if (!cap && ((d.kind !== 'afb_int' && d.kind !== 'carrier') || !(d.interceptors ?? 0))) continue;
+        if (distKm(f, d) > (cap ? FLIGHT.capRadiusKm : d.defenceKm ?? 450)) continue;
+        if (f.mission !== 'strike' && s.defcon[d.side] > 3) continue;
+        if (this.rng.chance(0.3 * perMin)) {
+          f.aircraft = (f.aircraft ?? 0) - 1;
+          // fighters shoot back
+          if (this.rng.chance(f.mission === 'recon' ? 0.05 : 0.3)) {
+            if (cap) { d.aircraft = (d.aircraft ?? 0) - 1; if (!d.aircraft) this.lose(d, f.side, `${d.id.toUpperCase()} — LAST FIGHTER LOST`); }
+            else d.interceptors = Math.max(0, (d.interceptors ?? 0) - 1);
+          }
+          this.emit({ kind: 'intercept', visibleTo: [f.side, d.side], text: `${d.name.split(' ')[0]} FIGHTERS DOWN 1 AIRCRAFT OF ${f.id.toUpperCase()}`, lat: f.lat, lon: f.lon });
+          if (!f.aircraft) this.lose(f, d.side, `${f.id.toUpperCase()} SHOT DOWN`);
+        }
+      }
+    }
+    // surface warfare: groups with a fresh contact on a hostile group in range trade anti-ship missiles at DEFCON 2
+    const groups = defenders.filter((u) => u.kind === 'carrier');
+    for (const h of groups) {
+      if (h.status === 'destroyed' || s.defcon[h.side] > 2) continue;
+      const intel = s.intel[h.side];
+      for (const t of groups) {
+        if (t.kind !== 'carrier' || t.status === 'destroyed' || !this.hostile(h.side, t.side)) continue;
+        const c = intel.contacts[t.id];
+        if (!c || s.t - c.seenT > 600 || distKm(h, t) > SURFACE_RANGE_KM) continue;
+        if (this.rng.chance(0.2 * perMin)) {
+          t.hp = Math.max(0, t.hp - this.rng.range(0.08, 0.25));
+          s.tension = Math.min(100, s.tension + 3);
+          if (t.hp <= 0) this.destroy(t, h.side);
+          else this.emit({ kind: 'intercept', visibleTo: [h.side, t.side], text: `${h.name} ANTI-SHIP MISSILES HIT ${t.name} — ${Math.round((1 - t.hp) * 100)}% DAMAGE`, lat: t.lat, lon: t.lon });
         }
       }
     }
@@ -893,6 +1135,45 @@ export class Game {
     };
   }
 
+  /** Recon flights on station identify ships and aircraft in their search circle; a sub near the surface may be spotted. */
+  private reconSighting(side: Side, e: Unit, dt: number, searchers: Unit[]) {
+    const s = this.s;
+    const mobile = e.kind === 'carrier' || e.kind === 'bomber' || e.kind === 'flight' || e.kind === 'ssn' || e.kind === 'ssbn';
+    if (!mobile || !searchers.length) return;
+    for (const f of searchers) {
+      const radius = f.mission === 'recon' ? FLIGHT.reconRadiusKm : f.mission === 'cap' ? 200 : 0;
+      if (!radius) continue;
+      const d = distKm(f, e);
+      if (d > radius) continue;
+      if (e.kind === 'ssn' || e.kind === 'ssbn') {
+        if (f.mission !== 'recon' || d > 120 || !this.rng.chance(0.06 * (dt / 60))) continue;
+      }
+      this.seeContact(side, e, true);
+      // each flight reports every group it sights (once per flight)
+      const key = `sight:${f.id}:${e.id}`;
+      if (!s.counters[key]) {
+        s.counters[key] = 1;
+        this.emit({ kind: 'detect', visibleTo: [side], side, text: `${f.id.toUpperCase()}: SIGHTED ${e.name} (${e.cls}) ${fmtLatLon(e)}${e.heading !== undefined && e.dest ? ` HDG ${Math.round(e.heading)}` : ''}`, lat: e.lat, lon: e.lon });
+      }
+      return;
+    }
+  }
+
+  /** Periodic intelligence summary for a faction: what it is tracking right now. */
+  private intelSummary(side: Side) {
+    const s = this.s;
+    const key = `isum:${side}`;
+    if (s.t < (s.counters[key] ?? INTEL_SUMMARY_SEC)) return;
+    s.counters[key] = s.t + INTEL_SUMMARY_SEC;
+    const fresh = Object.values(s.intel[side].contacts).filter((c) => c.status !== 'destroyed' && s.t - c.seenT < INTEL_SUMMARY_SEC);
+    const n = (k: string[]) => fresh.filter((c) => k.includes(c.kind)).length;
+    const parts = [
+      [n(['carrier']), 'SURFACE GROUP'], [n(['bomber']), 'BOMBER GROUP'], [n(['flight']), 'AIR FLIGHT'], [n(['ssn', 'ssbn']), 'SUBMARINE'],
+    ].filter(([k]) => (k as number) > 0).map(([k, l]) => `${k} ${l}${(k as number) > 1 ? 'S' : ''}`);
+    const clock = new Date(this.sc.startEpoch + s.t * 1000).toISOString().slice(11, 16);
+    this.emit({ kind: 'detect', visibleTo: [side], side, text: `INTEL SUMMARY ${clock}Z — ${parts.length ? `TRACKING ${parts.join(', ')}` : 'NO MOBILE FORCES CURRENTLY TRACKED — CONSIDER RECON SORTIES'} · ${n(FIXED_LIST)} FIXED SITES KNOWN` });
+  }
+
   private updateIntel(dt: number) {
     const s = this.s;
     const satPass = s.t >= s.nextSatPassT;
@@ -909,6 +1190,8 @@ export class Game {
       }
       const sensors = s.units.filter((u) => u.side === side && u.status !== 'destroyed');
       const airSensors = sensors.filter((u) => (u.kind === 'radar' || u.kind === 'afb_int' || u.kind === 'carrier') && (u.defenceKm ?? 0) > 0);
+      // this faction's flights that are searching (recon on the way / on station, CAP)
+      const searchers = sensors.filter((f) => f.kind === 'flight' && f.status !== 'returning' && (f.mission === 'recon' || f.mission === 'cap'));
       for (const e of s.units) {
         // allies share their picture (they appear as friendly forces); everyone else is a contact
         if (this.friendly(side, e.side)) continue;
@@ -920,7 +1203,7 @@ export class Game {
           if (intel.contacts[e.id]) intel.contacts[e.id].status = 'destroyed';
           continue;
         }
-        if (e.kind === 'bomber') {
+        if (e.kind === 'bomber' || e.kind === 'flight') {
           let seen = false, close = false;
           for (const r of airSensors) {
             const d = distKm(r, e);
@@ -937,11 +1220,15 @@ export class Game {
         } else if (e.kind === 'carrier') {
           let seen = satPass && this.rng.chance(0.85);
           for (const r of sensors) if ((r.kind === 'carrier' || r.kind === 'ssn' || r.kind === 'afb_int') && distKm(r, e) < 450) seen = true;
+          // coastal radars see ships near the coast
+          for (const r of sensors) if (!seen && r.kind === 'radar' && distKm(r, e) < Math.min(RADAR_SEA_KM, r.radarKm ?? RADAR_SEA_KM)) seen = true;
           if (seen) this.seeContact(side, e, true);
         } else if (e.kind === 'ssbn' || e.kind === 'ssn') {
           if ((e.revealedUntil ?? -1) > s.t) this.seeContact(side, e, true);
         }
+        if (!gone(e)) this.reconSighting(side, e, dt, searchers);
       }
+      this.intelSummary(side);
       // forget stale mobile contacts
       for (const [id, c] of Object.entries(intel.contacts)) {
         if (!FIXED_KINDS.has(c.kind) && s.t - c.seenT > 7200) delete intel.contacts[id];
@@ -1088,7 +1375,7 @@ export class Game {
     return {
       t: s.t, startEpoch: this.sc.startEpoch, speed: s.speed, paused: s.paused, viewer: role, defcon,
       tension: Math.round(s.tension),
-      units: units.filter((u) => !(u.kind === 'bomber' && u.status === 'destroyed' && (u.aircraft ?? 0) === 0 && s.t > 0)),
+      units: units.filter((u) => !((u.kind === 'bomber' || u.kind === 'flight') && u.status === 'destroyed' && (u.aircraft ?? 0) === 0 && s.t > 0)),
       contacts, missiles, detonations: s.detonations.filter((d) => s.t - d.t < 1800),
       cities: s.cities.filter((c) => c.killed > 0).map((c) => ({ id: c.id, killed: Math.round(c.killed) })),
       score: s.score, ai: this.ai, over: s.over,

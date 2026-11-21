@@ -44,7 +44,7 @@ export class AiOpponent {
     private llm: LlmProvider | 'rules',
     private opts: OpponentOptions = {},
   ) {
-    this.rules = new RuleBrain(side, opts.personality ?? 0.5, side === 'USA' ? 11 : 23);
+    this.rules = new RuleBrain(side, opts.personality ?? 0.5, side === 'USA' ? 11 : side === 'USSR' ? 23 : 31 + [...side].reduce((a, ch) => a + ch.charCodeAt(0), 0));
     this.status = {
       provider: llm === 'rules' ? 'builtin' : llm.provider,
       model: llm === 'rules' ? 'doctrine-1983' : llm.model,
@@ -99,7 +99,7 @@ export class AiOpponent {
 
   private runRules(g: Game, newEvents: GameEvent[]) {
     const snap = g.snapshot(this.side);
-    const { cmds } = this.rules.decide(snap, newEvents.length ? newEvents : []);
+    const { cmds } = this.rules.decide(snap, newEvents.length ? newEvents : [], g.staticWorld());
     this.exec(cmds, 'doctrine');
   }
 

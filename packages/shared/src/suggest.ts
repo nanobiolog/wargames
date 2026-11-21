@@ -23,7 +23,7 @@ export interface Suggestion {
   slot?: string;
 }
 
-const KINDS = ['silo', 'ssbn', 'ssn', 'carrier', 'airbase', 'bomber', 'afb_int', 'radar', 'abm', 'command', 'navalbase', 'enemy'];
+const KINDS = ['silo', 'ssbn', 'ssn', 'carrier', 'airbase', 'bomber', 'flight', 'afb_int', 'radar', 'abm', 'command', 'navalbase', 'enemy'];
 const TARGET_ORDER: Record<string, number> = { silo: 0, command: 1, airbase: 2, abm: 3, navalbase: 4, radar: 5, afb_int: 6, carrier: 7, ssbn: 8, ssn: 9, bomber: 10 };
 
 function own(ctx: SuggestCtx): Unit[] {
@@ -48,7 +48,11 @@ function candidatesFor(kind: ArgKind | undefined, ctx: SuggestCtx): string[] {
     case 'airbase':
       return own(ctx).filter((u) => u.kind === 'airbase' && (u.aircraft ?? 0) > 0).map((u) => u.id);
     case 'bomber':
-      return own(ctx).filter((u) => u.kind === 'bomber').map((u) => u.id);
+      return own(ctx).filter((u) => u.kind === 'bomber' || u.kind === 'flight').map((u) => u.id);
+    case 'airwing':
+      return own(ctx).filter((u) => (u.kind === 'carrier' || u.kind === 'afb_int') && (u.interceptors ?? 0) > 0).map((u) => u.id);
+    case 'mission':
+      return ['recon', 'cap', 'strike'];
     case 'mobile':
       return own(ctx).filter((u) => u.kind === 'carrier' || u.kind === 'ssbn' || u.kind === 'ssn' || u.kind === 'bomber').map((u) => u.id);
     case 'ownunit':

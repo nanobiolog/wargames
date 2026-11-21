@@ -1,6 +1,6 @@
 // In-display command console: the same orders, help and type-ahead as the terminal, inside any display tab.
 import {
-  parseCommandLine, describeCommand, helpLines, suggest, fmtLatLon, KIND_LABEL, selectionDetails, ballisticPos,
+  parseCommandLine, describeCommand, helpLines, suggest, fmtLatLon, KIND_LABEL, selectionDetails, ballisticPos, intelReport,
   type GameClient, type GameEvent, type PlanProposal, type Unit, type Contact, type Suggestion,
 } from '@coldlaunch/shared';
 import type { SceneState, LayerKey } from './scene.ts';
@@ -307,6 +307,11 @@ export class Console {
         const d = c.snap ? selectionDetails(p.id, c.snap) : null;
         if (d) for (const l of d.lines) this.print(`${l.label.padEnd(11)} ${l.value}`, 'c-magenta');
         return this.host.flyTo(p.lat, p.lon, undefined, p.name);
+      }
+      case 'intel': {
+        if (!c.snap) return;
+        for (const l of intelReport(c.snap)) this.print(l, l.startsWith(' ') ? '' : 'c-magenta');
+        return;
       }
       case 'list': {
         const s = c.snap;

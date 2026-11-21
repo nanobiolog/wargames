@@ -56,6 +56,7 @@ export const KIND_LABEL: Record<UnitKind, string> = {
   carrier: 'SURFACE GROUP',
   ssbn: 'SSBN',
   ssn: 'SSN',
+  flight: 'AIR FLIGHT',
 };
 
 /** Glyph used by the terminal map for each kind. */
@@ -71,6 +72,7 @@ export const KIND_GLYPH: Record<UnitKind, string> = {
   carrier: '▬',
   ssbn: '◒',
   ssn: '◓',
+  flight: '⌃',
 };
 
 /** Phosphor palette — shared between terminal and GUI. */

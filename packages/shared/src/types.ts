@@ -85,9 +85,13 @@ export type UnitKind =
   | 'navalbase'
   | 'carrier' // carrier / surface action group
   | 'ssbn' // ballistic missile submarine
-  | 'ssn'; // attack submarine
+  | 'ssn' // attack submarine
+  | 'flight'; // airborne fighter / recon / strike flight from a carrier or fighter base
 
-export const MOBILE_KINDS: UnitKind[] = ['bomber', 'carrier', 'ssbn', 'ssn'];
+export const MOBILE_KINDS: UnitKind[] = ['bomber', 'carrier', 'ssbn', 'ssn', 'flight'];
+
+/** Air missions flown from carriers and fighter bases. */
+export type AirMission = 'recon' | 'cap' | 'strike';
 
 export type UnitStatus =
   | 'ready'
@@ -133,6 +137,10 @@ export interface Unit extends LatLon {
   route?: LatLon[]; // remaining waypoints (ships)
   missilesMax?: number;
   revealedUntil?: number; // subs: visible to enemy after launching
+  // air flights
+  mission?: AirMission;
+  /** recon flights: leave the search area at this game time */
+  loiterUntil?: number;
 }
 
 /** What the other side knows about one of your units. */

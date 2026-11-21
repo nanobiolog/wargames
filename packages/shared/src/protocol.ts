@@ -15,6 +15,8 @@ export const CommandSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('scramble'), base: ref, count: z.number().int().min(1).max(40).optional(), to: ref.optional() }),
   z.object({ op: z.literal('strike'), unit: ref, target: ref }),
   z.object({ op: z.literal('recall'), unit: ref }),
+  /** launch an air flight from a carrier or fighter base: recon (any DEFCON), cap (DEFCON 4), strike (DEFCON 2) */
+  z.object({ op: z.literal('sortie'), from: ref, mission: z.enum(['recon', 'cap', 'strike']), to: ref.optional(), count: z.number().int().min(1).max(40).optional() }),
   z.object({ op: z.literal('speed'), value: z.number().min(0.5).max(120) }),
   z.object({ op: z.literal('pause'), value: z.boolean().optional() }),
   /** to: one faction id; omitted = every other faction */
