@@ -1,7 +1,7 @@
 import { describeCommand, type AiStatus, type Command, type GameEvent, type PlanProposal, type Side } from '@coldlaunch/shared';
-import type { Game, CommandResult } from '@coldlaunch/engine';
+import type { Game, CommandResult } from '@coldlaunch/engine/core';
 import { GAME_TOOLS, toolCallToCommand } from './tools.ts';
-import { describeAiError, isNetworkError, type LlmProvider } from './providers.ts';
+import { describeAiError, isNetworkError, type LlmProvider } from './llm.ts';
 import { RuleBrain } from './rules.ts';
 import { situationReport, opponentSystemPrompt, advisorSystemPrompt } from './situation.ts';
 

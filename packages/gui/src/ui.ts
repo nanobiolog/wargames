@@ -18,6 +18,8 @@ interface UiHost {
   connect(link: string): void;
   currentLink(): string | null;
   toggleConsole(): void;
+  openSettings(): void;
+  openLobby?(): void;
 }
 
 declare global {
@@ -83,6 +85,7 @@ export class Ui {
       return b;
     };
     btn(`VIEW: ${PRESET_LABEL[this.host.getPreset()] ?? this.host.getPreset()}`, () => this.toggle('presets'), 'Choose what this window shows (1-9)');
+    if (this.host.openLobby) btn('LOBBY', () => this.host.openLobby!(), 'Create or join online matches, invite friends');
     btn('SHARE', () => this.openShare(), 'QR codes for phones and other PCs');
     btn('CONSOLE', () => this.host.toggleConsole(), '` — type orders right here');
     btn('LAYERS', () => this.toggle('layers'), 'L');
@@ -90,6 +93,7 @@ export class Ui {
     btn('NEW WINDOW', () => this.newWindow(this.host.getPreset() === 'wall' ? 'world' : 'wall'), 'Open another display window');
     btn('ALL MONITORS', () => void this.allMonitors(), 'One preset per connected monitor');
     btn(this.sound ? 'SOUND ON' : 'SOUND OFF', () => { this.sound = !this.sound; this.refresh(); });
+    btn('SETTINGS', () => this.host.openSettings(), 'Graphics, callsign, AI keys');
     btn('?', () => this.toggle('help'));
     this.buildLayers();
     this.buildCrt();

@@ -6,3 +6,5 @@ packages/data/raw/
 .DS_Store
 saves/
 .env
+.wrangler/
+.dev.vars

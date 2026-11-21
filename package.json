@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "STRATCOM // COLD LAUNCH — a 1983 strategic command game: terminal console, glowing vector war-room wall display (Electron or browser, multi-monitor), Gemini/Claude AI opponents and MCP",
+  "description": "STRATCOM // COLD LAUNCH \u2014 a 1983 strategic command game: terminal console, glowing vector war-room wall display (Electron or browser, multi-monitor), Gemini/Claude AI opponents and MCP",
   "workspaces": [
     "packages/*"
   ],
@@ -23,8 +23,11 @@
     "mcp": "tsx packages/mcp/src/index.ts",
     "ai:smoke": "tsx packages/ai/src/smoke.ts",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "docs": "tsx packages/cli/src/gen-docs.ts"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p packages/cloud/tsconfig.json --noEmit",
+    "docs": "tsx packages/cli/src/gen-docs.ts",
+    "profile": "tsx packages/cli/src/profile.ts",
+    "cloud:dev": "npm run gui:build && npm run dev -w @coldlaunch/cloud",
+    "cloud:deploy": "npm run deploy -w @coldlaunch/cloud"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

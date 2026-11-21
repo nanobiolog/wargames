@@ -8,14 +8,15 @@
  *                [--no-gui] [--no-tui] [--ai-vs-ai] [--join <link>]
  */
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_PORT, GameClient, enemyOf, parseLink, type Side, type Role } from '@coldlaunch/shared';
+import { DEFAULT_PORT, GameClient, enemyOf, parseLink, normalizeCode, makeMatchLink, randomCallsign, cleanCallsign, shortCode, type Side, type Role } from '@coldlaunch/shared';
 import { Game, GameServer } from '@coldlaunch/engine';
-import { AiOpponent, loadConfig, makeAdvisor, makeProvider } from '@coldlaunch/ai';
+import { AiOpponent, loadConfig, makeAdvisor, makeProvider, describeAiError } from '@coldlaunch/ai';
 import { TuiApp } from '@coldlaunch/tui';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -48,7 +49,9 @@ if (flag('--help') || flag('-h')) {
   --lan                    share with phones / other PCs on your network from the start
                            (or type "share" in the game any time for QR codes)
   --no-tui                 run the server only and print the session link
-  --join <link>            connect this terminal to an existing session
+  --join <link|CODE>       connect this terminal to an existing session, or to an online match by its
+                           5-character code (server: COLDLAUNCH_SERVER or "server" in config.json)
+  --name <callsign>        your callsign in online matches (saved in ~/.coldlaunch/identity.json)
 
   API keys: run "npm run setup" (saved to ~/.coldlaunch/config.json), or set GEMINI_API_KEY / ANTHROPIC_API_KEY`);
   process.exit(0);
@@ -88,14 +91,54 @@ function openBrowser(url: string) {
   spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
 }
 
+/** Callsign, player id and friend tag for online matches (shared by every terminal on this machine). */
+function loadIdentity(name?: string): { name: string; player: string; tag: string } {
+  const f = join(homedir(), '.coldlaunch', 'identity.json');
+  let id: { name?: string; player?: string; tag?: string } = {};
+  try { id = JSON.parse(readFileSync(f, 'utf8')); } catch { /* first run */ }
+  const out = {
+    name: cleanCallsign(name) ?? cleanCallsign(id.name) ?? randomCallsign(),
+    player: id.player ?? `p-${randomUUID().replace(/-/g, '').slice(0, 20)}`,
+    tag: id.tag ?? shortCode(),
+  };
+  mkdirSync(join(homedir(), '.coldlaunch'), { recursive: true });
+  writeFileSync(f, JSON.stringify(out, null, 2), { mode: 0o600 });
+  return out;
+}
+
 async function main() {
-  const joinLink = opt('--join');
+  let joinLink = opt('--join');
   if (joinLink) {
-    const client = new GameClient('tui');
-    await client.connect(joinLink, opt('--side') as Role | undefined);
+    // a bare 5-character code joins an online match on the default server
+    const code = normalizeCode(joinLink);
+    const onlineServer = process.env.COLDLAUNCH_SERVER ?? loadConfig().server ?? 'https://coldlaunch.nano-carbay.workers.dev';
+    if (code) joinLink = makeMatchLink(onlineServer, code, opt('--side') as Role | undefined);
     const p = parseLink(joinLink);
-    const webUrl = p ? `http://${p.host}:${p.port}/?token=${p.token}${p.role ? `&role=${p.role}` : ''}` : undefined;
-    new TuiApp(client, { openGui: () => openGui(joinLink), openWeb: webUrl ? (preset) => openBrowser(`${webUrl}${preset ? `&preset=${preset}` : ''}`) : undefined }).start();
+    const client = new GameClient('tui');
+    if (p?.online) {
+      // online match: identity from ~/.coldlaunch/identity.json; this terminal can run AI calls for its
+      // side with the key saved by `npm run setup` (the key stays on this machine)
+      const id = loadIdentity(opt('--name'));
+      const cfg = loadConfig();
+      const llm = makeProvider(cfg.advisor ?? cfg.opponent ?? (cfg.anthropicApiKey ? 'claude' : cfg.geminiApiKey ? 'gemini' : 'rules'), cfg);
+      client.identity = { name: id.name, player: id.player, tag: id.tag, caps: llm === 'rules' ? [] : ['ai'] };
+      if (llm !== 'rules') {
+        client.on('aiJob', async (job) => {
+          try {
+            const r = await llm.decide(job.system, job.user, job.tools as never);
+            client.aiResult({ t: 'aiResult', id: job.id, calls: r.calls.slice(0, 16), text: r.text.slice(0, 4000), inTok: r.inTok, outTok: r.outTok });
+          } catch (e) {
+            client.aiResult({ t: 'aiResult', id: job.id, error: describeAiError(e, llm.provider).slice(0, 400) });
+          }
+        });
+      }
+    }
+    await client.connect(joinLink, opt('--side') as Role | undefined);
+    const webUrl = p?.online
+      ? makeMatchLink(`${p.secure ? 'https' : 'http'}://${p.host}${p.port === (p.secure ? 443 : 80) ? '' : `:${p.port}`}`, p.token, client.role)
+      : p ? `http://${p.host}:${p.port}/?token=${p.token}${p.role ? `&role=${p.role}` : ''}` : undefined;
+    const sep = webUrl?.includes('?') ? '&' : '?';
+    new TuiApp(client, { openGui: () => openGui(joinLink!), openWeb: webUrl ? (preset) => openBrowser(`${webUrl}${preset ? `${sep}preset=${preset}` : ''}`) : undefined }).start();
     return;
   }
 

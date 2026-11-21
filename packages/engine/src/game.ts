@@ -6,11 +6,26 @@ import {
 } from '@coldlaunch/shared';
 import { buildUnits, CITIES, SEA_AREAS, loadLandMask, loadPlaces, type Place } from '@coldlaunch/data';
 import { Rng } from './rng.ts';
-import { OceanNav } from './nav.ts';
+import { OceanNav, RouteJob } from './nav.ts';
 
 export const TICK_SEC = 0.1; // real seconds per tick
 export const SCENARIO_START = Date.UTC(1983, 10, 8, 21, 0, 0); // 8 Nov 1983 21:00Z
 export const TIME_LIMIT = 8 * 3600;
+/**
+ * Ocean-route cells expanded per tick. Long routes (around a continent) need ~100-400k cells, so
+ * they finish within a few real seconds while each tick stays under ~10 ms. Counted in cells, not
+ * milliseconds, so every machine finishes the same route on the same tick.
+ */
+export const ROUTE_BUDGET = 8_000;
+
+/** A ship waiting for its ocean route (persisted so saves resume mid-search). */
+interface RouteRequest {
+  unitId: string;
+  side: Side;
+  to: LatLon;
+  name: string;
+  spent: number;
+}
 
 interface SimMissile extends Missile {
   seenBy: Side[];
@@ -68,6 +83,8 @@ export interface GameState {
   hotlineCooldown: Record<Side, number>;
   counters: Record<string, number>;
   log: { tick: number; side: Side; cmd: Command }[];
+  /** ships waiting for a route (FIFO; one search active at a time) */
+  routeQueue?: RouteRequest[];
 }
 
 export interface CommandResult {
@@ -79,6 +96,10 @@ let sharedNav: OceanNav | null = null;
 let sharedPlaces: Place[] | null = null;
 function nav() {
   return (sharedNav ??= new OceanNav(loadLandMask()));
+}
+/** Build the shared ocean grid now (≈0.2-0.3 s) instead of on the first ship order. */
+export function warmNav() {
+  nav();
 }
 function places() {
   return (sharedPlaces ??= loadPlaces());
@@ -94,6 +115,8 @@ export class Game {
   s: GameState;
   private rng: Rng;
   private unitIdx = new Map<string, Unit>();
+  /** live search for routeQueue[0] (rebuilt from `spent` after a load) */
+  private routeJob?: { req: RouteRequest; job: RouteJob };
   /** Status for AI opponents, filled in by the AI driver. */
   ai: Partial<Record<Side, AiStatus>> = {};
 
@@ -309,14 +332,18 @@ export class Game {
           return { ok: true, msg: `${u.id} NEW ORBIT ${fmtLatLon(p.pos)}` };
         }
         if (!SHIP_KINDS.has(u.kind)) return { ok: false, msg: `${u.id} (${u.kind.toUpperCase()}) IS A FIXED INSTALLATION` };
-        const route = nav().route(u, p.pos);
-        if (!route) return { ok: false, msg: `NO SEA ROUTE TO ${p.name}` };
-        u.route = route;
-        u.dest = route[0];
+        const q = (s.routeQueue ??= []);
+        // a new order replaces any course still being plotted for this unit
+        const prev = q.findIndex((r) => r.unitId === u.id);
+        if (prev >= 0) { q.splice(prev, 1); if (prev === 0) this.routeJob = undefined; }
+        const plan = nav().plan(u, p.pos);
+        if (plan === null) return { ok: false, msg: `NO SEA ROUTE TO ${p.name}` };
+        if (Array.isArray(plan)) return { ok: true, msg: this.startRoute(u, plan, p.name) };
+        q.push({ unitId: u.id, side, to: p.pos, name: p.name, spent: 0 });
         u.status = 'moving';
-        const km = Math.round(routeLen(u, route));
-        const hrs = km / (u.speedKmh ?? 40);
-        return { ok: true, msg: `${u.id} UNDERWAY TO ${p.name} — ${km} KM, ETA ${hrs.toFixed(1)} H` };
+        u.dest = null;
+        u.route = undefined;
+        return { ok: true, msg: `${u.id} PLOTTING COURSE TO ${p.name}` };
       }
 
       case 'speed':
@@ -340,6 +367,52 @@ export class Game {
       case 'hold':
         return { ok: true, msg: 'HOLDING' };
     }
+  }
+
+  private startRoute(u: Unit, route: LatLon[], name: string) {
+    const km = Math.round(routeLen(u, route));
+    u.route = route;
+    u.dest = route[0];
+    u.status = 'moving';
+    return `${u.id} UNDERWAY TO ${name} — ${km} KM, ETA ${(km / (u.speedKmh ?? 40)).toFixed(1)} H`;
+  }
+
+  /** Advance queued ocean-route searches by a fixed cell budget (never blocks a tick for long). */
+  private processRoutes() {
+    const q = this.s.routeQueue;
+    let budget = ROUTE_BUDGET;
+    while (q?.length && budget > 0) {
+      const req = q[0];
+      const u = this.unit(req.unitId);
+      if (!u || u.status === 'destroyed') { q.shift(); this.routeJob = undefined; continue; }
+      if (this.routeJob?.req !== req) {
+        const plan = nav().plan(u, req.to);
+        if (!(plan instanceof RouteJob)) {
+          q.shift();
+          this.finishRoute(u, req, plan);
+          continue;
+        }
+        plan.spent = req.spent; // resume a saved search: the job replays to this point
+        this.routeJob = { req, job: plan };
+      }
+      const before = this.routeJob.job.spent;
+      const res = this.routeJob.job.run(budget);
+      budget -= Math.max(1, this.routeJob.job.spent - before);
+      req.spent = this.routeJob.job.spent;
+      if (res === undefined) break;
+      q.shift();
+      this.routeJob = undefined;
+      this.finishRoute(u, req, res);
+    }
+  }
+
+  private finishRoute(u: Unit, req: RouteRequest, route: LatLon[] | null) {
+    if (!route) {
+      u.status = 'patrol';
+      this.emit({ kind: 'warn', visibleTo: [req.side], side: req.side, text: `${u.id.toUpperCase()}: NO SEA ROUTE TO ${req.name}` });
+      return;
+    }
+    this.emit({ kind: 'info', visibleTo: [req.side], side: req.side, text: this.startRoute(u, route, req.name).toUpperCase() });
   }
 
   private commandIntact(side: Side) {
@@ -432,6 +505,7 @@ export class Game {
     s.tick++;
     s.t += dt;
     this.fireOrders();
+    this.processRoutes();
     this.moveUnits(dt);
     this.updateMissiles();
     this.combat(dt);

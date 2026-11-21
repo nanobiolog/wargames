@@ -2,7 +2,7 @@
   "name": "@coldlaunch/gui",
   "version": "0.1.0",
   "private": true,
-  "description": "STRATCOM // COLD LAUNCH — vector wall display",
+  "description": "STRATCOM // COLD LAUNCH \u2014 vector wall display",
   "main": "main.cjs",
   "scripts": {
     "build": "vite build",
@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@coldlaunch/shared": "*",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "@coldlaunch/ai": "*"
   },
   "devDependencies": {
     "electron": "^45.4.1",

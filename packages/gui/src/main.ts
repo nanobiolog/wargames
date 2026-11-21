@@ -1,11 +1,12 @@
-import { GameClient, makeLink, parseLink, type Focus, type GameEvent, type LatLon, type PlanProposal, type Role, type Snapshot } from '@coldlaunch/shared';
+import { GameClient, makeLink, makeMatchLink, normalizeCode, parseLink, type Focus, type GameEvent, type LatLon, type PlanProposal, type Role, type Snapshot } from '@coldlaunch/shared';
 import { Renderer, DynBatch, type FxSettings } from './gl.ts';
 import { GeoStore, bucketize } from './geo.ts';
 import { buildWorld, LAYER_LIST, type LayerKey, type SceneState } from './scene.ts';
-import { drawPanel, layoutFor, phoneLayout, panelAt, zoomPanel, panPanel, flyTo, nearestPick, PRESET_NAMES, type Panel, type WallCtx, type PhoneMode } from './wall.ts';
+import { MOTION, drawPanel, layoutFor, phoneLayout, panelAt, zoomPanel, panPanel, flyTo, nearestPick, PRESET_NAMES, type Panel, type WallCtx, type PhoneMode } from './wall.ts';
 import { PhoneHud } from './phone.ts';
 import { Ui } from './ui.ts';
 import { Console } from './console.ts';
+import { Online, DEFAULT_SETTINGS, type Settings } from './online.ts';
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('gl') as HTMLCanvasElement;
@@ -30,6 +31,14 @@ const st: SceneState = {
 };
 const fx: FxSettings = { bloom: 0.55, persistence: 0.8, scanlines: 0.3, exposure: 1.05, ...store.get('fx2', {}) };
 const smallTouch = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 700;
+const settings: Settings = { ...DEFAULT_SETTINGS, ...(smallTouch ? { fpsCap: 30, dprCap: 2 } : {}), ...store.get<Partial<Settings>>('settings', {}) };
+const fxPersistence = fx.persistence;
+function applySettings() {
+  MOTION.flyMs = settings.reduceMotion || matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 900;
+  if (settings.reduceMotion) fx.persistence = 0;
+  else if (fx.persistence === 0) fx.persistence = fxPersistence || 0.8;
+  relayout();
+}
 let preset = params.get('preset') ?? (smallTouch ? 'phone' : store.get('preset', 'wall'));
 let phoneMode: PhoneMode = store.get('phoneMode', 'split');
 if (!PRESET_NAMES.includes(preset)) preset = 'wall';
@@ -55,7 +64,7 @@ function makeGrids() {
 // ------------------------------------------------------------------ layout
 
 function relayout() {
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = Math.min(settings.dprCap, window.devicePixelRatio || 1);
   st.dpr = dpr;
   const W = Math.floor(window.innerWidth * dpr), H = Math.floor(window.innerHeight * dpr);
   r.resize(W, H);
@@ -97,6 +106,8 @@ function setPreset(name: string) {
 // ------------------------------------------------------------------ connection
 
 function resolveLink(): string | null {
+  const m = normalizeCode(params.get('m') ?? '');
+  if (m && location.protocol.startsWith('http')) return makeMatchLink(location.origin, m, (params.get('role') as Role) ?? undefined);
   const l = params.get('link');
   if (l && parseLink(l)) return l;
   const token = params.get('token');
@@ -114,7 +125,8 @@ async function connect(link: string) {
     ctx.connected = true;
     ui.hideConnect();
   } catch (e) {
-    ui.showConnect(`${(e as Error).message}`);
+    if (online.available) online.showLobby(`Could not join: ${(e as Error).message}`);
+    else ui.showConnect(`${(e as Error).message}`);
   }
 }
 
@@ -271,6 +283,15 @@ const ui = new Ui(document.getElementById('ui')!, {
   connect: (link) => void connect(link),
   currentLink: () => client.link ?? null,
   toggleConsole: () => konsole.toggle(),
+  openSettings: () => online.openSettings(),
+  openLobby: () => (online.available ? online.showLobby() : ui.showConnect('Paste the session link printed in your terminal.')),
+});
+
+const online = new Online(document.getElementById('ui')!, {
+  client, store, fx, settings, applySettings,
+  connect: (link) => connect(link),
+  toast: (m, cls) => ui.toast(m, cls),
+  showLocalConnect: (m) => ui.showConnect(m),
 });
 
 function mainMap(): Panel | undefined {
@@ -375,7 +396,11 @@ canvas.addEventListener('touchend', (e) => {
 
 // ------------------------------------------------------------------ frame loop
 
+let lastFrame = 0;
 function frame(now: number) {
+  // frame-rate cap (Settings → Graphics): skip this vsync if we drew too recently
+  if (settings.fpsCap && now - lastFrame < 1000 / settings.fpsCap - 2) { requestAnimationFrame(frame); return; }
+  lastFrame = now;
   const s = client.snap;
   st.snap = s;
   st.world = client.world;
@@ -398,8 +423,11 @@ async function boot() {
   relayout();
   await geo.init();
   requestAnimationFrame(frame);
+  applySettings();
+  const isOnline = await online.detect();
   const link = resolveLink();
-  if (link) await connect(link);
+  if (link && (isOnline || !parseLink(link)?.online)) await connect(link);
+  else if (isOnline) online.showLobby();
   else ui.showConnect('Paste the session link printed in your terminal.');
 }
 boot();

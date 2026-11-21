@@ -429,11 +429,14 @@ export function panPanel(p: Panel, dx: number, dy: number) {
   p.tween = undefined;
 }
 
+/** Animation settings (Settings → reduce motion sets flyMs to ~0). */
+export const MOTION = { flyMs: 900 };
+
 export function flyTo(p: Panel, lat: number, lon: number, zoom?: number, title?: string) {
   if (!p.view) return;
   const to: View = { ...p.view, lat, lon, zoom: zoom ?? p.view.zoom };
   if (p.view.proj === 'polar' && lat < 20) to.proj = 'polar';
-  p.tween = { from: { ...p.view }, to, t0: performance.now(), dur: 900 };
+  p.tween = { from: { ...p.view }, to, t0: performance.now(), dur: Math.max(1, MOTION.flyMs) };
   if (title) p.title = title;
 }
 

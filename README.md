@@ -37,6 +37,26 @@ npm start              # engine + terminal console + wall display
 
 Without any API key you play against the built-in doctrine AI.
 
+### Play online with friends (Cloudflare)
+
+Each online match runs in its own Cloudflare Durable Object. It holds the authoritative engine, ticks while players are connected, and hibernates when the match is idle.
+
+```bash
+npm run cloud:dev       # local test server: http://127.0.0.1:8787
+npm run cloud:deploy    # deploy to your Cloudflare account
+```
+
+**Live server:** https://coldlaunch.nano-carbay.workers.dev — `npm start -- --join K7M2Q` uses it by default.
+
+Open the site and pick a **callsign**, or roll a random one. **Create a match** (vs a friend, the doctrine AI, or an LLM with your own key) and share the **5-character code** (e.g. `K7M2Q`) or the link `https://<host>/m/K7M2Q`. Friends add your **friend tag** and get live invites.
+
+* **Several screens per player.** Open the same match on a second monitor, another tab or your phone. Screens with the same callsign identity command the same side.
+* **Spectators** get the whole picture: `…/m/K7M2Q?role=SPECTATOR&preset=wall`.
+* **Terminal:** run `npm start -- --join K7M2Q` (set `COLDLAUNCH_SERVER` or `"server"` in `~/.coldlaunch/config.json`).
+* **Your AI key stays with you.** In the browser it is stored on your device only (Settings → AI keys), never sent to the game server. It goes straight to the provider. A phone without a key can still give plain-English orders: your PC tab or terminal that has the key makes the AI call.
+
+Settings (graphics quality, frame-rate cap, resolution, reduce motion, callsign, AI keys) are in the toolbar. See [docs/ROADMAP.md](docs/ROADMAP.md) for the architecture, profiling results, the modern multi-country scenario plan, and monetisation and marketing.
+
 ### Add an AI opponent (API keys)
 
 Run **`npm run setup`**. It asks for your keys with hidden input and saves them to `~/.coldlaunch/config.json`
@@ -95,6 +115,7 @@ npm start -- --side USSR --personality 0.9          # play the Soviet side again
 npm start -- --all-monitors                         # Electron: one fullscreen window per monitor
 npm start -- --ai-vs-ai --opponent gemini           # watch two AIs (spectator)
 npm run sim -- --seed 3                             # headless rules-vs-rules match
+npm run profile -- --games 3                        # time every engine phase, routing, snapshots and type-ahead
 ```
 
 ### AI providers

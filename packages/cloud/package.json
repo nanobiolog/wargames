@@ -1,0 +1,23 @@
+{
+  "name": "@coldlaunch/cloud",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Online matches on Cloudflare: one Durable Object per match (engine + hibernating WebSockets), friend invites, and the web wall display as static assets",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "npm run build -w @coldlaunch/gui && wrangler deploy",
+    "types": "wrangler types",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "dependencies": {
+    "@coldlaunch/ai": "*",
+    "@coldlaunch/data": "*",
+    "@coldlaunch/engine": "*",
+    "@coldlaunch/shared": "*"
+  },
+  "devDependencies": {
+    "wrangler": "^4.166.0"
+  }
+}

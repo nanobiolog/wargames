@@ -1,6 +1,6 @@
 // Built-in doctrine AI: no API key needed; also the fallback when an LLM call fails.
 import { enemyOf, distKm, type Command, type GameEvent, type Side, type Snapshot, type Unit } from '@coldlaunch/shared';
-import { Rng } from '@coldlaunch/engine';
+import { Rng } from '@coldlaunch/engine/core';
 
 export class RuleBrain {
   private rng: Rng;

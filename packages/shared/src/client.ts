@@ -1,7 +1,7 @@
 // WebSocket game client shared by the terminal, the Electron GUI and the MCP server.
 // Uses the global WebSocket (browsers, Electron, Node >= 22).
 import {
-  parseLink, type ClientMsg, type Command, type Focus, type PlanProposal, type ServerMsg, type ShareInfo,
+  parseLink, wsUrl, type AiJob, type MatchInfo, type RosterEntry, type ClientMsg, type Command, type Focus, type PlanProposal, type ServerMsg, type ShareInfo,
 } from './protocol.ts';
 import type { GameEvent, Role, Snapshot, StaticWorld } from './types.ts';
 
@@ -18,7 +18,11 @@ export class GameClient {
   role?: Role;
   link?: string;
   aiOpponent?: string;
+  match?: MatchInfo;
+  roster: RosterEntry[] = [];
   events: GameEvent[] = [];
+  /** identity sent in hello (online matches) */
+  identity: { name?: string; player?: string; tag?: string; caps?: 'ai'[] } = {};
   connected = false;
   private ws?: WebSocket;
   private seq = 0;
@@ -32,6 +36,9 @@ export class GameClient {
     plan: new Set<Listener<PlanProposal | null>>(),
     status: new Set<Listener<string>>(),
     welcome: new Set<Listener<StaticWorld>>(),
+    roster: new Set<Listener<RosterEntry[]>>(),
+    aiJob: new Set<Listener<AiJob>>(),
+    chat: new Set<Listener<{ from: string; role: Role; text: string }>>(),
   };
   private closedByUser = false;
 
@@ -53,12 +60,12 @@ export class GameClient {
     this.closedByUser = false;
     return new Promise((resolve, reject) => {
       let settled = false;
-      const ws = new WebSocket(`ws://${p.host}:${p.port}/`);
+      const ws = new WebSocket(wsUrl(p));
       this.ws = ws;
-      ws.onopen = () => {
-        this.raw({ t: 'hello', token: p.token, role: role ?? p.role, client: this.kind });
-      };
-      ws.onmessage = (ev) => {
+      ws.addEventListener('open', () => {
+        this.raw({ t: 'hello', token: p.token, role: role ?? p.role, client: this.kind, ...this.identity });
+      });
+      ws.addEventListener('message', (ev: MessageEvent) => {
         const msg = JSON.parse(String(ev.data)) as ServerMsg;
         if (msg.t === 'welcome' && !settled) {
           settled = true;
@@ -69,18 +76,18 @@ export class GameClient {
           reject(new Error(msg.msg));
         }
         this.onMsg(msg);
-      };
-      ws.onerror = () => {
+      });
+      ws.addEventListener('error', () => {
         if (!settled) {
           settled = true;
           reject(new Error(`cannot reach game server at ${p.host}:${p.port}`));
         }
-      };
-      ws.onclose = () => {
+      });
+      ws.addEventListener('close', () => {
         this.connected = false;
         this.fire('status', 'disconnected');
-        if (!this.closedByUser && settled) setTimeout(() => this.connect(link, role).catch(() => {}), 1500);
-      };
+        if (!this.closedByUser && settled) setTimeout(() => this.connect(link, role).catch(() => {}), 1500 + Math.random() * 1500);
+      });
     });
   }
 
@@ -100,6 +107,7 @@ export class GameClient {
         this.role = m.role;
         this.world = m.world;
         this.aiOpponent = m.aiOpponent;
+        this.match = m.match;
         this.events = [];
         this.fire('welcome', m.world);
         this.fire('status', 'connected');
@@ -141,7 +149,31 @@ export class GameClient {
       case 'error':
         this.fire('status', `ERROR: ${m.msg}`);
         break;
+      case 'roster':
+        this.roster = m.players;
+        this.fire('roster', m.players);
+        break;
+      case 'aiJob':
+        this.fire('aiJob', m.job);
+        break;
+      case 'chat':
+        this.fire('chat', { from: m.from, role: m.role, text: m.text });
+        break;
     }
+  }
+
+  /** Return the result of an aiJob (online matches; the key never leaves this device). */
+  aiResult(r: Extract<ClientMsg, { t: 'aiResult' }>) {
+    this.raw(r);
+  }
+
+  chat(text: string) {
+    this.raw({ t: 'chat', text });
+  }
+
+  /** Heartbeat (online matches keep their server awake only while the clock runs). */
+  ping() {
+    this.raw({ t: 'ping' });
   }
 
   cmd(cmd: Command): Promise<Result> {

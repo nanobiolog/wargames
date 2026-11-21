@@ -1,0 +1,25 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "coldlaunch",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // The web wall display (packages/gui/dist). API and match routes run the Worker first.
+  "assets": {
+    "directory": "../gui/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/m/*"]
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "MATCH", "class_name": "MatchRoom" },
+      { "name": "INBOX", "class_name": "Inbox" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MatchRoom", "Inbox"] }],
+  // A running match ticks at 10 Hz between player messages; clients also send a heartbeat every 20 s.
+  // On the Workers Paid plan, raise the per-invocation CPU allowance (not available on Free):
+  // "limits": { "cpu_ms": 300000 },
+  "observability": { "enabled": true }
+}

@@ -5,3 +5,4 @@ export { makeProvider, loadConfig, DEFAULT_MODELS, MODEL_MENU, describeAiError, 
 export type { LlmProvider, AiConfig } from './providers.ts';
 export { GAME_TOOLS, toolCallToCommand } from './tools.ts';
 export { situationReport } from './situation.ts';
+export { opponentSystemPrompt, advisorSystemPrompt } from './situation.ts';

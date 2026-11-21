@@ -7,7 +7,7 @@ import { join, normalize, extname } from 'node:path';
 import {
   ClientMsgSchema, makeLink, enemyOf, type Command, type PlanProposal, type Role, type ServerMsg, type Side, type ShareInfo,
 } from '@coldlaunch/shared';
-import { Game, TICK_SEC } from './game.ts';
+import { Game, TICK_SEC, warmNav } from './game.ts';
 
 export interface Advisor {
   (side: Side, text: string, game: Game): Promise<PlanProposal | { error: string }>;
@@ -176,6 +176,7 @@ export class GameServer {
       this.http!.once('error', reject);
       this.http!.listen(this.port, this.host, () => resolve());
     });
+    warmNav();
     this.timer = setInterval(() => this.loop(), TICK_SEC * 1000);
   }
 
@@ -210,12 +211,17 @@ export class GameServer {
       try { fn(this.game); } catch (e) { console.error(e); }
     }
     const sendSnap = this.tickN % 2 === 0; // 5 Hz
+    const snaps = new Map<Role, string>(); // one snapshot + JSON per role, shared by every screen of that role
     for (const c of this.clients) {
       if (!c.authed) continue;
       const evs = this.game.eventsFor(c.role, c.eventIdx);
       c.eventIdx = this.game.s.events.length;
       if (evs.length) this.send(c, { t: 'events', events: evs });
-      if (sendSnap) this.send(c, { t: 'snap', snap: this.game.snapshot(c.role) });
+      if (sendSnap) {
+        let json = snaps.get(c.role);
+        if (!json) snaps.set(c.role, (json = JSON.stringify({ t: 'snap', snap: this.game.snapshot(c.role) })));
+        if (c.ws.readyState === c.ws.OPEN) c.ws.send(json);
+      }
     }
   }
 
@@ -327,6 +333,10 @@ export class GameServer {
       }
       case 'ping':
         return this.send(c, { t: 'pong' });
+      case 'chat':
+        return this.broadcast('ALL', { t: 'chat', from: c.kind.toUpperCase(), role: c.role, text: m.text });
+      case 'aiResult':
+        return; // local sessions run AI in this process
     }
   }
 
