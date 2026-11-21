@@ -1,6 +1,8 @@
 // Edge entry point: match lobby API, WebSocket routing to the match's Durable Object, friend
 // invites, and the web wall display (static assets, served before this code runs).
-import { normalizeCode, shortCode, cleanCallsign, type Side } from '@coldlaunch/shared';
+import { normalizeCode, shortCode, cleanCallsign } from '@coldlaunch/shared';
+import { SCENARIOS, scenarioList } from '@coldlaunch/data';
+import './geo.ts';
 import type { CreateOptions } from './match.ts';
 import type { Invite } from './inbox.ts';
 
@@ -20,9 +22,13 @@ export default {
     // ---- matches
     if (path === '/api/match' && req.method === 'POST') {
       const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+      const scenario = typeof body.scenario === 'string' && SCENARIOS[body.scenario] ? body.scenario : '1983';
+      const sc = SCENARIOS[scenario];
+      const side = sc.factions.find((f) => f.playable && f.id === body.side)?.id ?? sc.defaultSides[0];
       const opts: CreateOptions = {
+        scenario,
         opponent: (['human', 'rules', 'byok'] as const).find((o) => o === body.opponent) ?? 'human',
-        hostSide: (body.side === 'USSR' ? 'USSR' : 'USA') as Side,
+        hostSide: side,
         speed: typeof body.speed === 'number' ? body.speed : undefined,
         personality: typeof body.personality === 'number' ? body.personality : undefined,
         host: cleanCallsign(typeof body.name === 'string' ? body.name : undefined) ?? undefined,
@@ -86,6 +92,7 @@ export default {
       return json(Object.fromEntries(status));
     }
 
+    if (path === '/api/scenarios') return new Response(JSON.stringify(scenarioList()), { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=300' } });
     if (path === '/api/health') return json({ ok: true });
     if (path.startsWith('/api/')) return json({ error: 'not found' }, 404);
     return env.ASSETS.fetch(req);

@@ -158,6 +158,17 @@ export class TuiApp {
     return (this.client.role ?? 'USA') as Side | 'SPECTATOR';
   }
 
+  /** your faction first, then the others in scenario order (classic: the USA/USSR pair) */
+  private sidesFor(role: Side | 'SPECTATOR'): Side[] {
+    const all = this.client.world?.factions?.map((f) => f.id) ?? ['USA', 'USSR'];
+    return role === 'SPECTATOR' ? all : [role, ...all.filter((f) => f !== role)];
+  }
+
+  private factionCol(side: Side | 'SPECTATOR'): RGB {
+    const f = this.client.world?.factions?.find((x) => x.id === side);
+    return f ? hex(f.color) : side === 'USSR' ? COL.ussr : side === 'USA' ? COL.usa : COL.text;
+  }
+
   private allUnits(): (Unit | Contact)[] {
     const s = this.client.snap;
     return s ? [...s.units, ...s.contacts] : [];
@@ -682,9 +693,9 @@ export class TuiApp {
     const seg = (s: string, c: RGB, bold = false) => { scr.put(x, 0, s, c, bg, bold); x += s.length + 2; };
     seg('STRATCOM // COLD LAUNCH', COL.title, true);
     const role = this.side();
-    seg(role, role === 'USSR' ? COL.ussr : role === 'USA' ? COL.usa : COL.text, true);
+    seg(role, this.factionCol(role), true);
     if (snap) {
-      const own = role === 'SPECTATOR' ? Math.min(snap.defcon.USA, snap.defcon.USSR) : snap.defcon[role];
+      const own = role === 'SPECTATOR' ? Math.min(...Object.values(snap.defcon)) : snap.defcon[role];
       seg(`DEFCON ${own}`, DEFCON_COLOR[own], true);
       seg(`${new Date(snap.startEpoch + snap.t * 1000).toISOString().slice(0, 19).replace('T', ' ')}Z`, COL.text);
       seg(snap.paused ? 'PAUSED' : `x${snap.speed}`, snap.paused ? COL.yellow : COL.dim, snap.paused);
@@ -716,7 +727,7 @@ export class TuiApp {
     if (!snap) return;
     const role = this.side();
     const rows: [string, RGB][] = [];
-    const sides: Side[] = role === 'USSR' ? ['USSR', 'USA'] : ['USA', 'USSR'];
+    const sides = this.sidesFor(role).slice(0, 3);
     rows.push([sides.map((sd) => `${sd} DEFCON ${snap.defcon[sd]}${role !== 'SPECTATOR' && sd !== role ? '(EST)' : ` ${DEFCON_NAMES[snap.defcon[sd]]}`}`).join('  │  '), DEFCON_COLOR[role === 'SPECTATOR' ? 5 : snap.defcon[role as Side]]]);
     rows.push([`INBOUND ${snap.threat.inbound}  DETONATIONS ${snap.threat.impacts}  BMR ${snap.threat.bombers}  SUB ${snap.threat.subs}  TENSION ${snap.tension}`, snap.threat.inbound ? COL.red : COL.text]);
     if (role !== 'SPECTATOR') {
@@ -743,7 +754,7 @@ export class TuiApp {
     };
     if (!snap) return line('AWAITING DATA LINK…', COL.yellow);
     const role = this.side();
-    const sides: Side[] = role === 'USSR' ? ['USSR', 'USA'] : ['USA', 'USSR'];
+    const sides = this.sidesFor(role);
     for (const s of sides) {
       const lvl = snap.defcon[s];
       const est = role !== 'SPECTATOR' && s !== role ? ' (EST)' : '';
@@ -868,7 +879,7 @@ export class TuiApp {
     let hint = sug.hint;
     if (this.input && sug.candidates.length > 1) hint += `   ▸ ${sug.candidates.slice(0, 8).join('  ')}`;
     scr.put(1, y - 1, hint.slice(0, w - 2), this.plan ? COL.yellow : dim(COL.cyan, 0.9), [3, 10, 22]);
-    const prompt = this.plan ? 'EXECUTE? [y/N] ' : `${this.side() === 'USSR' ? 'СТАВКА' : 'NCA'}> `;
+    const prompt = this.plan ? 'EXECUTE? [y/N] ' : `${this.side() === 'USSR' || this.side() === 'RUS' ? 'СТАВКА' : this.side() === 'CHN' ? '中央军委' : this.side() === 'USA' ? 'NCA' : this.side()}> `;
     const color = this.plan ? COL.yellow : COL.green;
     scr.fill(0, y, w, 1, [0, 0, 0]);
     scr.put(0, y, prompt, color, [0, 0, 0], true);

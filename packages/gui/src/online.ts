@@ -279,23 +279,18 @@ export class Online {
           <div class="lbl">JOIN A MATCH</div>
           <div class="line"><input class="code" placeholder="K7M2Q" value="${esc(pending ?? '')}" autocapitalize="characters" autocomplete="off"></div>
           <div class="line">
-            <select class="joinrole"><option value="">Any free seat</option><option>USA</option><option>USSR</option><option value="SPECTATOR">Watch (spectator)</option></select>
+            <select class="joinrole"><option value="">Take a free seat</option><option value="SPECTATOR">Watch (spectator)</option></select>
             <button class="big join">JOIN</button>
           </div>
           <p class="hint">Use the same callsign on your phone, a second monitor or another tab to command the same side on several screens.</p>
         </div>
         <div class="sec">
           <div class="lbl">NEW MATCH</div>
-          <label class="row">Scenario <select class="scenario">
-            <option value="1983">1983 — USA vs USSR (classic)</option>
-            <option value="modern" disabled>Modern multipolar — coming soon</option>
-          </select></label>
+          <label class="row">Scenario <select class="scenario"><option value="1983">1983 AUTUMN EXERCISE</option></select></label>
+          <p class="hint sbrief"></p>
           <label class="row">You command <select class="side"><option>USA</option><option>USSR</option></select></label>
-          <label class="row">Opponent <select class="opp">
-            <option value="human">A friend (share the code)</option>
-            <option value="rules">Doctrine AI (free, offline rules)</option>
-            <option value="byok">LLM AI with your own key</option>
-          </select></label>
+          <p class="hint fbrief"></p>
+          <label class="row">Opponent <select class="opp"></select></label>
           <label class="row temp">Temperament <input type="range" class="pers" min="0" max="1" step="0.05" value="0.5"><span class="persv">balanced</span></label>
           <label class="row">Time compression <select class="speed"><option value="5">x5</option><option value="10" selected>x10</option><option value="20">x20</option><option value="30">x30</option></select></label>
           <button class="big create">CREATE MATCH</button>
@@ -317,6 +312,42 @@ export class Online {
     const persv = q<HTMLElement>('.persv');
     pers.oninput = () => { const v = +pers.value; persv.textContent = v < 0.3 ? 'dove' : v > 0.7 ? 'hawk' : 'balanced'; };
     const opp = q<HTMLSelectElement>('.opp');
+    const scSel = q<HTMLSelectElement>('.scenario');
+    const sideSel = q<HTMLSelectElement>('.side');
+    const fillScenario = () => {
+      const sc = this.scenarios.find((x) => x.id === scSel.value) ?? this.scenarios[0];
+      if (!sc) return;
+      const multi = sc.factions.length > 2;
+      q<HTMLElement>('.sbrief').textContent = sc.summary;
+      const keep = sideSel.value;
+      sideSel.innerHTML = sc.factions.map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
+      sideSel.value = sc.factions.some((f) => f.id === keep) ? keep : sc.defaultSides[0];
+      const keepOpp = opp.value || 'human';
+      opp.innerHTML = multi
+        ? `<option value="human">Friends — the AI plays every empty seat</option>
+           <option value="rules">Just me — the doctrine AI plays everyone else</option>
+           <option value="byok">My AI key plays my main adversary, doctrine AI the rest</option>`
+        : `<option value="human">A friend (share the code)</option>
+           <option value="rules">Doctrine AI (free, offline rules)</option>
+           <option value="byok">LLM AI with your own key</option>`;
+      opp.value = keepOpp;
+      syncFaction();
+      syncOpp();
+    };
+    const syncFaction = () => {
+      const sc = this.scenarios.find((x) => x.id === scSel.value);
+      const f = sc?.factions.find((x) => x.id === sideSel.value);
+      const el = q<HTMLElement>('.fbrief');
+      el.textContent = f?.brief ?? '';
+      el.style.color = f?.color ?? '';
+    };
+    sideSel.onchange = syncFaction;
+    scSel.onchange = fillScenario;
+    void this.loadScenarios().then(() => {
+      scSel.innerHTML = this.scenarios.map((x) => `<option value="${x.id}">${esc(x.name)}${x.factions.length > 2 ? ` — ${x.factions.length} factions` : ' — classic'}</option>`).join('');
+      scSel.value = this.scenarios.some((x) => x.id === this.host.store.get('scenario', '1983')) ? this.host.store.get('scenario', '1983') : '1983';
+      fillScenario();
+    });
     const syncOpp = () => q<HTMLElement>('.temp').classList.toggle('hidden', opp.value === 'human');
     opp.onchange = () => {
       syncOpp();
@@ -338,11 +369,12 @@ export class Online {
       if (opp.value === 'byok' && !this.hasKey()) { this.openSettings('ai'); return; }
       const res = await fetch('/api/match', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ opponent: opp.value, side: q<HTMLSelectElement>('.side').value, speed: +q<HTMLSelectElement>('.speed').value, personality: +pers.value, name: this.id.name }),
+        body: JSON.stringify({ scenario: scSel.value, opponent: opp.value, side: sideSel.value, speed: +q<HTMLSelectElement>('.speed').value, personality: +pers.value, name: this.id.name }),
       });
       const m = (await res.json()) as { code?: string; error?: string };
       if (!m.code) return this.host.toast(`COULD NOT CREATE MATCH: ${m.error ?? res.status}`, 'bad');
-      await this.join(m.code, q<HTMLSelectElement>('.side').value as Side);
+      this.host.store.set('scenario', scSel.value);
+      await this.join(m.code, sideSel.value as Side);
       if (opp.value === 'human') this.openShare(); // next step is always "send it to a friend"
       else this.host.toast(`MATCH ${m.code} STARTED`, 'hot');
     };
@@ -443,6 +475,16 @@ export class Online {
    * small count badge appears on ☰ / SETTINGS until you look at them.
    */
   private invites: { from: string; fromTag: string; code: string; at: number }[] = [];
+  private scenarios: { id: string; name: string; summary: string; defaultSides: string[]; factions: { id: string; name: string; short: string; color: string; brief: string }[] }[] = [];
+
+  private async loadScenarios() {
+    if (this.scenarios.length) return;
+    try {
+      this.scenarios = await fetch('/api/scenarios').then((r) => r.json());
+    } catch {
+      this.scenarios = [];
+    }
+  }
 
   private showInvite(from: string, fromTag: string, code: string) {
     if (this.host.client.match?.code === code) return; // already there
@@ -498,8 +540,12 @@ export class Online {
     const by = (r: string) => roster.filter((p) => p.role === r);
     const names = (r: string) => [...new Set(by(r).map((p) => p.name))].join(', ') || '—';
     const watching = by('SPECTATOR').length;
+    const factions = c.world?.factions ?? [{ id: 'USA', color: '#8cd9ff' }, { id: 'USSR', color: '#ff524a' }];
+    // one entry per faction: who holds it (or AI); with many factions show your side and the humans first
+    const seats = factions.map((f) => ({ f, who: names(f.id), human: by(f.id).some((p) => p.kind !== 'ai') }))
+      .sort((a, b) => (factions.length > 2 ? Number(b.f.id === c.role) - Number(a.f.id === c.role) || Number(b.human) - Number(a.human) : 0));
     this.bar.innerHTML = `<b class="code" title="Click to copy the match link">MATCH ${c.match.code}</b>
-      <span class="usa">USA ${esc(names('USA'))}</span> <span class="ussr">USSR ${esc(names('USSR'))}</span>
+      ${seats.map(({ f, who }) => `<span class="roster" style="color:${f.color}">${f.id} ${esc(who)}</span>`).join(' ')}
       ${watching ? `<span>· ${watching} watching</span>` : ''} <span class="you">you: ${esc(c.role ?? '')}</span>`;
     const code = this.bar.querySelector('.code') as HTMLElement;
     code.onclick = () => void navigator.clipboard?.writeText(makeMatchLink(location.origin, c.match!.code)).then(() => this.host.toast('MATCH LINK COPIED'));

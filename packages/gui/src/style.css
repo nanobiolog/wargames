@@ -286,3 +286,8 @@ body.has-invites .menubtn::after, body.has-invites .toolbar .setbtn::after {
   .matchbar { gap: 6px; padding: 3px 6px; right: 4px; }
   .matchbar .usa, .matchbar .ussr, .matchbar .roster { overflow: hidden; text-overflow: ellipsis; max-width: 28vw; white-space: nowrap; flex-shrink: 1; }
 }
+
+/* the match bar fades with the toolbar when idle so it never hides panel content for long */
+.matchbar { transition: opacity 0.6s; }
+body:not(.phone) .toolbar.faded ~ .matchbar { opacity: 0.12; }
+body:not(.phone) .toolbar.faded ~ .matchbar:hover, body:not(.phone) .matchbar:focus-within { opacity: 1; }

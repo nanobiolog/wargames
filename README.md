@@ -13,6 +13,8 @@ tools can command your side through **MCP**.
 | **Every screen you own** | Command the same side from your PC, a second monitor and your phone at once. Scan "my other screens" to link them |
 | **Your AI key stays yours** | Bring your own Claude or Gemini key: it is stored only in your browser and goes straight to the provider |
 | **Terminal first** | `npm start -- --join K7M2Q` joins an online match from any terminal, with type-ahead for every order |
+| **Two scenarios** | **1983 Autumn Exercise** (USA vs USSR) and **2026 Straits Crisis**: five factions (USA, European coalition, Russia, China, India), alliances and a neutral that won't stay neutral if attacked. Up to 5 players, and the AI fills every empty seat |
+| **Naval aviation & intelligence** | Carriers fly recon, combat air patrols and conventional strikes; surface groups fight; coastal radars track ships; `intel` shows what your sensors see |
 
 The look is inspired by early-80s NORAD-style vector displays. The game, its name, its text and its endings are original.
 
@@ -115,6 +117,31 @@ npm start -- --display none       # terminal only; open the display later
 Save your preferred mode with `npm run setup`. In the terminal, `gui` reopens the display, and `web` opens a browser
 tab at any time (`web conus`, `web missiles`, `web stats` …). If Electron isn't available, the game falls back to a browser tab.
 
+### Scenarios
+
+| scenario | factions | notes |
+|---|---|---|
+| `1983` (default) | USA vs USSR | the classic two-player crisis during a NATO command-post exercise |
+| `modern` | USA + European coalition (allied) · Russia + China (aligned) · India (neutral) | a fictional 2026 stand-off over the sea lanes. Attacking a nation that is not already your enemy makes it one. Online: friends take seats, the doctrine AI plays the rest; locally, every other faction is an AI |
+
+Online, pick the scenario and your faction in the lobby. Locally: `npm start -- --scenario modern --side CHN`.
+Forces sit at publicly known, approximate locations and are scaled for play, not accuracy.
+
+### Air operations and intelligence
+
+```
+recon cvbg-midway to sea of okhotsk      # 2 jets search ~350 km around a point (any DEFCON)
+cap cvbg-eisenhower                      # combat air patrol over the group (DEFCON 4; shoots at DEFCON 3)
+airstrike cvbg-americas at sag-kirov x 10  # conventional raid on a ship group or base (DEFCON 2)
+intel                                    # what radars, satellites and recon flights are tracking
+hotline chn: we seek calm in the straits # in multi-faction games, address one nation
+```
+
+Jets come from the group's own fighters, so a carrier with its air wing away defends itself less. Recon flights
+identify ships and aircraft and may catch a submarine near the surface. Surface groups that hold a contact on a hostile
+group within 300 km trade anti-ship missiles at DEFCON 2. Coastal radars track ships, and every faction receives an
+intelligence summary every 30 game-minutes.
+
 Common variations:
 
 ```bash
@@ -122,6 +149,7 @@ npm start -- --opponent gemini                      # your saved Gemini model (d
 npm start -- --opponent claude:claude-haiku-5-5     # a specific Claude model
 npm start -- --opponent human --host 0.0.0.0        # a friend plays the other side from another PC
 npm start -- --side USSR --personality 0.9          # play the Soviet side against a hawkish US AI
+npm start -- --scenario modern --side EUR           # 2026: command the European coalition, AI plays the other four
 npm start -- --all-monitors                         # Electron: one fullscreen window per monitor
 npm start -- --ai-vs-ai --opponent gemini           # watch two AIs (spectator)
 npm run sim -- --seed 3                             # headless rules-vs-rules match
@@ -191,9 +219,10 @@ This table is generated from the game's own command list (`npm run docs`).
 |---|---|---|---|
 | `defcon &lt;1-5&gt;` | set your readiness level. DEFCON 5 is peacetime, 1 is maximum readiness. You can escalate only one level at a time, with about 90 game-seconds between steps. De-escalation is immediate. Bombers can take off at DEFCON 3 or lower; missile launches and bomber go-codes need DEFCON 1. The other side sees your change after an intelligence delay. | `defcon 4`<br>`defcon 5` | both |
 | `launch &lt;silo\|ssbn&gt; at &lt;target&gt; [x N]`<br>alias: `fire` | fire ballistic missiles (irreversible). Fires N missiles (default 1) from one of your ICBM fields or ballistic-missile submarines. The target can be a known enemy unit id, an enemy city, or coordinates like 55.7,37.6. Liftoff happens after a short authentication delay. Missiles cannot be recalled. Firing from a submarine reveals its position. | `launch icbm-minot at kozelsk x 3`<br>`launch ssbn-ohio at 55.7,37.6` | both |
+| `sortie &lt;carrier\|fighter base&gt; &lt;recon\|cap\|strike&gt; [to &lt;place\|target&gt;] [x N]`<br>alias: `recon`, `cap`, `airstrike` | fly jets from a carrier or fighter base: reconnaissance, air patrol or a strike. Draws aircraft from the carrier group's or base's fighters (which also defend it, so the group is weaker while they are away). RECON (any DEFCON, default 2 aircraft) flies to a point, searches ~350 km around it for 20 game-minutes, identifies ships, bombers and other flights, and reports. CAP, combat air patrol (DEFCON 4 or lower, default 4), orbits a point (default: over the carrier), shadows intruders and at DEFCON 3 shoots down hostile bombers and recon flights. STRIKE (DEFCON 2, default 8) is a conventional raid on a ship group or base; the target's air defence shoots some aircraft down. Flights come home when fuel runs low; recall brings them back early. Shortcuts: recon &lt;carrier&gt; to &lt;place&gt;, cap &lt;carrier&gt; [over &lt;place&gt;], airstrike &lt;carrier&gt; at &lt;target&gt;. | `recon cvbg-midway to sea of okhotsk`<br>`cap cvbg-eisenhower`<br>`airstrike cvbg-americas at sag-kirov x 10`<br>`sortie afb-elmendorf recon to bering sea` | both |
 | `scramble &lt;base&gt; [N] [to &lt;place&gt;]` | launch bombers to a holding orbit. Sends N bombers (default: all) from a bomber base to a fail-safe orbit. Without "to", they fly to a default point toward the enemy. They wait there for a go-code (strike) and return home when fuel runs low; a tanker extends their time once. Requires DEFCON 3. | `scramble afb-loring`<br>`scramble afb-minot 3 to baffin bay` | both |
 | `strike &lt;bomber-group&gt; at &lt;target&gt;`<br>alias: `go` | send the go-code to an airborne bomber group. The group flies to the target and releases all its weapons, then heads home if it has the fuel. Interceptors and carrier air defence can shoot bombers down on the way. Requires DEFCON 1. | `strike bmr-loring-1 at murmansk` | both |
-| `recall &lt;bomber-group&gt;` | bring a bomber group home. Cancels an orbit or a strike that has not arrived yet; the aircraft return to base and can be scrambled again. | `recall bmr-loring-1` | both |
+| `recall &lt;bomber-group\|flight&gt;` | bring a bomber group home. Cancels an orbit or a strike that has not arrived yet; the aircraft return to base and can be scrambled again. | `recall bmr-loring-1` | both |
 | `move &lt;unit&gt; to &lt;place&gt;` | move a fleet, submarine or bomber orbit. Carrier and surface groups and submarines route around land automatically and report when they are on station. For an airborne bomber group this sets a new orbit point. Fixed installations cannot move. | `move cvbg-midway to sea of japan`<br>`move ssn-memphis to barents sea` | both |
 | `hotline &lt;message&gt;`<br>alias: `msg` | message the other side directly. Sends text over the direct communications link. AI opponents read and answer it. Conciliatory messages lower world tension a little (once every 5 game-minutes). | `hotline our bombers are on a training exercise. we propose a mutual stand-down.` | both |
 | `ask &lt;anything&gt;` | natural-language orders via your AI advisor. Your advisor model turns plain language into orders and shows the plan for you to confirm (y/N). The wall display previews it as dashed yellow lines. Any line that is not a command is sent to the advisor automatically. | `ask put the bombers on alert and move the midway group north`<br>`what is the closest enemy submarine?` | both |
@@ -218,6 +247,7 @@ This table is generated from the game's own command list (`npm run docs`).
 | command | what it does | example | where |
 |---|---|---|---|
 | `list [kind\|enemy]` | list your units or known enemy contacts. Kinds: silo, ssbn, ssn, carrier, airbase, bomber, afb_int, radar, abm, command, navalbase. | `list silo`<br>`list enemy` | both |
+| `intel` | what your radars, satellites and recon flights are tracking. Every known contact grouped by type (surface groups, submarines, bombers, air flights, fixed sites), when it was last seen and whether it is identified, plus your own flights in the air. Radars track aircraft and ships near the coast, satellites pass every 20 minutes, and recon sorties identify everything within ~350 km. | `intel` | both |
 | `info [unit\|missile]` | details of the selected (or named) unit or missile | `info`<br>`info bmr-loring-1` | both |
 | `help [command]`<br>alias: `?` | list commands, or explain one in detail | `help`<br>`help launch` | both |
 | `keys`<br>alias: `setup` | how to add Gemini / Claude API keys | `keys` | terminal |

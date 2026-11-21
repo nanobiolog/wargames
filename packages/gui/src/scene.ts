@@ -140,7 +140,18 @@ const ICONS: Record<string, Pt[][]> = {
   city: [circle(0.9, 0, 0, 10)],
 };
 
-const sideCol = (s: Side) => (s === 'USA' ? COL.usa : COL.ussr);
+/** Faction colours from the scenario (classic: USA blue, USSR red). Set on every welcome. */
+const FACTION_COL = new Map<Side, number[]>();
+export function setFactionColors(world: StaticWorld | undefined) {
+  FACTION_COL.clear();
+  for (const f of world?.factions ?? []) {
+    const n = parseInt(f.color.replace('#', ''), 16);
+    FACTION_COL.set(f.id, [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255, 1]);
+  }
+}
+export const sideCol = (s: Side): number[] => FACTION_COL.get(s) ?? (s === 'USA' ? COL.usa : s === 'USSR' ? COL.ussr : COL.unknown);
+/** lighter variant for missile tracks */
+export const missileCol = (s: Side): number[] => { const c = sideCol(s); return [c[0] + (1 - c[0]) * 0.35, c[1] + (1 - c[1]) * 0.35, c[2] + (1 - c[2]) * 0.35, 1]; };
 const dimC = (c: number[], f: number) => [c[0], c[1], c[2], (c[3] ?? 1) * f];
 
 export function icon(b: DynBatch, lat: number, lon: number, kind: string, col: number[], size: number, w: number, rot = 0, mirror = false) {
@@ -280,7 +291,7 @@ export function buildWorld(b: DynBatch, st: SceneState) {
 function drawMissile(b: DynBatch, m: Missile, t: number, st: SceneState, lw: number) {
   const pos = ballisticPos(m.from, m.to, m.launchT, m.impactT, m.apexKm, t);
   if (pos.f <= 0) return;
-  const base = m.type === 'ABM' ? COL.yellow : m.side === 'USA' ? COL.mUSA : COL.mUSSR;
+  const base = m.type === 'ABM' ? COL.yellow : missileCol(m.side);
   const N = 40;
   let prev = ballisticPos(m.from, m.to, 0, 1, m.apexKm, 0);
   for (let i = 1; i <= N; i++) {

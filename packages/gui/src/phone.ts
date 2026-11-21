@@ -53,6 +53,11 @@ export class PhoneHud {
     return document.body.classList.contains('phone') ? this.el.getBoundingClientRect().height || 48 : 0;
   }
 
+  private sideStyle(role: string) {
+    const f = this.host.client.world?.factions?.find((x) => x.id === role);
+    return f ? `color:${f.color};border-color:${f.color}` : '';
+  }
+
   private syncTabs() {
     for (const b of this.tabs) b.classList.toggle('active', b.dataset.mode === this.host.getMode());
   }
@@ -63,7 +68,7 @@ export class PhoneHud {
     const lvl = role === 'SPECTATOR' ? Math.min(...Object.values(s.defcon)) : s.defcon[role];
     const clock = new Date(s.startEpoch + s.t * 1000).toISOString().slice(11, 16);
     this.stats.innerHTML =
-      `<span class="side ${role === 'USSR' ? 'su' : 'us'}">${role === 'SPECTATOR' ? 'OBS' : role}</span>` +
+      `<span class="side ${role === 'USSR' ? 'su' : 'us'}" style="${this.sideStyle(role)}">${role === 'SPECTATOR' ? 'OBS' : role}</span>` +
       `<span class="defcon ${DEFCON_CLASS[lvl]}" title="${DEFCON_NAMES[lvl]}">DEFCON ${lvl}</span>` +
       `<span>${clock}Z${s.paused ? ' ⏸' : ` ×${s.speed}`}</span>` +
       `<span class="${s.tension > 70 ? 'red' : ''}">T ${s.tension}</span>` +

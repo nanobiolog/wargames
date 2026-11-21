@@ -259,7 +259,8 @@ export class MapView {
 
     const snap = d.snap;
     const viewer = d.side ?? 'USA';
-    const sideColor = (s: Side) => (s === 'USA' ? C.usa : C.ussr);
+    const fcol = new Map((d.world?.factions ?? []).map((f) => [f.id, hex(f.color)] as const));
+    const sideColor = (s: Side): RGB => fcol.get(s) ?? (s === 'USA' ? C.usa : C.ussr);
 
     // ---- cities
     if (L.cities && d.world) {
@@ -308,7 +309,7 @@ export class MapView {
     if (L.missiles) {
       for (const m of snap.missiles) {
         const pos = ballisticPos(m.from, m.to, m.launchT, m.impactT, m.apexKm, snap.t);
-        const col = m.type === 'ABM' ? C.warn : m.side === 'USA' ? C.mUSA : C.mUSSR;
+        const col = m.type === 'ABM' ? C.warn : fcol.size > 2 ? sideColor(m.side) : m.side === 'USA' ? C.mUSA : C.mUSSR;
         const n = 28;
         const trail: LatLon[] = [];
         for (let i = 0; i <= n; i++) trail.push(ballisticPos(m.from, m.to, 0, 1, m.apexKm, (i / n) * pos.f).p);

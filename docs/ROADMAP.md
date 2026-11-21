@@ -1,6 +1,6 @@
 # COLD LAUNCH — roadmap
 
-Status as of 21 Nov 2026. Section 1 is built and tested. Sections 2–7 are the plan.
+Status as of 21 Nov 2026. Section 1 is built and tested. Section 2 is partly built (marked ✅). Sections 3–7 are the plan.
 
 ---
 
@@ -72,7 +72,13 @@ A Durable Object is placed near whoever created it, so friends on other continen
 
 Goal: a second scenario, chosen in the lobby, where 2–8 players (or AIs) each command one or more countries in a present-day crisis, alongside the classic 1983 two-player game.
 
-### 2.1 Engine generalisation (prerequisite)
+### 2.1 Engine generalisation (prerequisite) ✅ done
+
+Built as described below. Scenario-defined factions and a live relations matrix (attacking a non-hostile nation
+makes it hostile). Intel and DEFCON assessments per faction, allies share their picture, end conditions per faction.
+1983 stays bit-identical (`cli/src/baseline.ts`). Still open: splitting one faction among several players by branch,
+and per-viewport interest management.
+
 
 `Side = 'USA' | 'USSR'` is hard-coded across the engine, AI, GUI and TUI. Steps:
 
@@ -87,6 +93,7 @@ Goal: a second scenario, chosen in the lobby, where 2–8 players (or AIs) each 
 
 | system | gameplay | notes |
 |---|---|---|
+| ✅ **Carrier air wings** | `sortie` recon / CAP / strike from carriers and fighter bases; surface warfare; coastal radar ship tracking; intel summaries and `intel` | built in both scenarios |
 | **Reconnaissance satellites** | orbital passes (real ground tracks from simple two-line elements), revisit times, cloud cover; reveal ships and mobile launchers | replaces today's fixed 20-minute satellite pass |
 | **Drones** | MALE ISR drones (loiter, spot), loitering munitions (cheap, slow, interceptable) | swarms stress air defence; cost/benefit decisions |
 | **Cruise missiles** | ship-, sub-, air- and ground-launched; low-altitude terrain-following paths (reuse ocean/land routing); radar horizon | new `Missile.type = 'CRUISE'` with waypoints |
@@ -97,7 +104,7 @@ Goal: a second scenario, chosen in the lobby, where 2–8 players (or AIs) each 
 
 Data: use only public, coarse, encyclopedic locations (major ports, well-known bases, large refineries), at Natural Earth / Wikipedia level. No precise or sensitive targeting data. Placement is intentionally approximate and fictionalised where needed.
 
-### 2.3 Delivery order
+### 2.3 Delivery order (1, 2 and the 2026 scenario are done)
 
 1. Faction refactor behind the 1983 scenario, kept bit-identical (determinism tests guard this).
 2. Scenario file format (JSON) plus a "modern 2026" scenario with 6 factions.

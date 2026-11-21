@@ -3,7 +3,7 @@
  * coldlaunch — start the game engine, take over this terminal as the command console,
  * and open the Electron wall display linked to the same session.
  *
- *   npm start -- [--side USA|USSR] [--opponent rules|claude[:model]|gemini[:model]|openai:model@url]
+ *   npm start -- [--scenario 1983|modern] [--side USA|USSR|EUR|RUS|CHN|IND] [--opponent rules|claude[:model]|gemini[:model]|openai:model@url]
  *                [--advisor <spec>|none] [--personality 0..1] [--port 7700] [--seed N]
  *                [--no-gui] [--no-tui] [--ai-vs-ai] [--join <link>]
  */
@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_PORT, GameClient, enemyOf, parseLink, normalizeCode, makeMatchLink, randomCallsign, cleanCallsign, shortCode, type Side, type Role } from '@coldlaunch/shared';
 import { Game, GameServer } from '@coldlaunch/engine';
+import { getScenario } from '@coldlaunch/data';
 import { AiOpponent, loadConfig, makeAdvisor, makeProvider, describeAiError } from '@coldlaunch/ai';
 import { TuiApp } from '@coldlaunch/tui';
 
@@ -33,7 +34,7 @@ if (flag('--help') || flag('-h')) {
 
   npm start -- [options]
 
-  --side USA|USSR          side you command (default USA)
+  --side <faction>         side you command: USA|USSR (1983), USA|EUR|RUS|CHN|IND (modern); default USA
   --opponent <spec>        rules | human | claude[:model] | gemini[:model] | openai:model@baseURL
                            e.g. gemini:gemini-3.1-flash-lite, claude:claude-haiku-5-5
                            human = a second person plays the other side (see the "link" command)
@@ -49,6 +50,7 @@ if (flag('--help') || flag('-h')) {
   --lan                    share with phones / other PCs on your network from the start
                            (or type "share" in the game any time for QR codes)
   --no-tui                 run the server only and print the session link
+  --scenario <1983|modern> 1983 (USA vs USSR, default) or modern (2026, five factions: USA EUR RUS CHN IND)
   --join <link|CODE>       connect this terminal to an existing session, or to an online match by its
                            5-character code (server: COLDLAUNCH_SERVER or "server" in config.json)
   --name <callsign>        your callsign in online matches (saved in ~/.coldlaunch/identity.json)
@@ -143,7 +145,9 @@ async function main() {
   }
 
   const cfg = loadConfig();
-  const side = ((opt('--side') ?? 'USA').toUpperCase() === 'USSR' ? 'USSR' : 'USA') as Side;
+  const scenario = getScenario(opt('--scenario') ?? '1983');
+  const wantSide = (opt('--side') ?? scenario.defaultSides[0]).toUpperCase();
+  const side = (scenario.factions.find((f) => f.playable && (f.id === wantSide || f.short === wantSide))?.id ?? scenario.defaultSides[0]) as Side;
   const aiVsAi = flag('--ai-vs-ai');
   const personality = Math.max(0, Math.min(1, parseFloat(opt('--personality', String(cfg.personality ?? 0.5))!)));
   const oppSpec = opt('--opponent') ?? process.env.COLDLAUNCH_OPPONENT ?? cfg.opponent ?? 'rules';
@@ -161,7 +165,7 @@ async function main() {
   const server = new GameServer({
     port,
     host: opt('--host', '127.0.0.1'),
-    game: new Game(seed),
+    game: new Game(seed, undefined, scenario.id),
     playerSide: aiVsAi ? 'USA' : side,
     advisor: advisorLlm && advisorLlm !== 'rules' ? makeAdvisor(advisorLlm) : undefined,
     staticDir: join(ROOT, 'packages', 'gui', 'dist'),
@@ -169,8 +173,15 @@ async function main() {
   await server.start();
 
   const ais: AiOpponent[] = [];
-  const enemy = enemyOf(side);
+  const g0 = server.game;
+  const enemy = g0.hostilesOf(side)[0] ?? enemyOf(side);
+  // two factions: the opponent (LLM or doctrine); more: your main adversary gets the chosen opponent,
+  // every other faction the doctrine AI (allies and neutrals play cautiously)
   if (!humanOpponent) ais.push(new AiOpponent(server, enemy, opponent, { personality, log }).attach());
+  for (const f of g0.factions) {
+    if (f === side || f === enemy) continue;
+    ais.push(new AiOpponent(server, f, 'rules', { personality: g0.hostile(side, f) ? personality : 0.4, log }).attach());
+  }
   if (aiVsAi) ais.push(new AiOpponent(server, side, opponent, { personality: 1 - personality * 0.6, log }).attach());
   server.aiLabel = humanOpponent ? `${enemy}=human` : ais.map((a) => `${a.side}=${a.label}`).join(' ');
   if (flag('--lan')) await server.enableLan();

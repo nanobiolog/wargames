@@ -133,7 +133,7 @@ export class GameServer {
   /** Share links for a given player role (used by the share panel / QR codes / `link`). */
   shareInfo(role: Role): ShareInfo {
     const side: Side = role === 'SPECTATOR' ? this.playerSide : role;
-    const other = enemyOf(side);
+    const other = this.game.hostilesOf(side)[0] ?? enemyOf(side);
     const lan = this.lanEnabled && !!this.publicHost;
     return {
       lan,

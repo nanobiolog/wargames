@@ -1,7 +1,7 @@
 import { GameClient, makeLink, makeMatchLink, normalizeCode, parseLink, type Focus, type GameEvent, type LatLon, type PlanProposal, type Role, type Snapshot } from '@coldlaunch/shared';
 import { Renderer, DynBatch, type FxSettings } from './gl.ts';
 import { GeoStore, bucketize } from './geo.ts';
-import { buildWorld, LAYER_LIST, type LayerKey, type SceneState } from './scene.ts';
+import { buildWorld, setFactionColors, LAYER_LIST, type LayerKey, type SceneState } from './scene.ts';
 import { MOTION, drawPanel, layoutFor, phoneLayout, panelAt, zoomPanel, panPanel, flyTo, nearestPick, PRESET_NAMES, type Panel, type WallCtx, type PhoneMode } from './wall.ts';
 import { PhoneHud } from './phone.ts';
 import { Ui } from './ui.ts';
@@ -133,6 +133,7 @@ async function connect(link: string) {
 
 client.on('welcome', () => {
   st.role = (client.role ?? 'USA') as SceneState['role'];
+  setFactionColors(client.world);
   konsole.setRole(st.role);
   events.length = 0;
   st.trails.clear();

@@ -1,11 +1,12 @@
 // Wall layout: panels (maps, status boards, log), presets for single-monitor views, and input handling.
 import {
   DEFCON_NAMES, fmtLatLon, describeCommand, type GameEvent, type Side, type Snapshot, type Unit,
+  hostilesOf, stanceOf,
 } from '@coldlaunch/shared';
 import { DynBatch, type Renderer, type GeoBuffer } from './gl.ts';
 import { GeoStore, visibleRanges } from './geo.ts';
 import { fromScreen, spanDeg, toScreen, xform, type View, type Xform } from './proj.ts';
-import { COL, buildPanelLabels, screenText, type Pick, type SceneState } from './scene.ts';
+import { COL, buildPanelLabels, screenText, sideCol, missileCol, type Pick, type SceneState } from './scene.ts';
 import { textWidth } from './font.ts';
 
 export type PanelKind = 'map' | 'log' | 'strip' | 'missiles' | 'stats';
@@ -32,7 +33,7 @@ export const MAP_PRESETS: Record<string, { title: string; view: View }> = {
   polar: { title: 'NORTH POLAR — BALLISTIC CORRIDORS', view: V(90, 0, 1.15, 'polar') },
   conus: { title: 'NORAD — CONTINENTAL UNITED STATES', view: V(38.5, -97, 3.4) },
   alaska: { title: 'ALASKAN AIR DEFENSE ZONE', view: V(62, -152, 5) },
-  eurasia: { title: 'SOVIET UNION — STRATEGIC FORCES', view: V(55, 78, 2.3) },
+  eurasia: { title: 'EURASIA — STRATEGIC FORCES', view: V(55, 78, 2.3) },
   europe: { title: 'EUROPEAN THEATER', view: V(53, 18, 5) },
   atlantic: { title: 'NORTH ATLANTIC — GIUK GAP', view: V(60, -20, 3.2) },
   grandforks: { title: 'GRAND FORKS AIR FORCE BASE', view: V(47.95, -97.4, 45) },
@@ -271,7 +272,7 @@ function drawMissileBoard(b: DynBatch, st: SceneState, title: string, w: number,
     const head = `${m.id.toUpperCase().padEnd(6)}${m.type.padEnd(5)}${m.side.padEnd(6)}`;
     const tgt = m.target.slice(0, Math.max(6, cols - head.length - 8));
     const line = `${head}${tgt}`.padEnd(Math.max(0, cols - 7)) + etaS;
-    const col = mine ? COL.mUSA : m.confirmed === false ? COL.yellow : COL.red;
+    const col = mine ? missileCol(m.side) : m.confirmed === false ? COL.yellow : COL.red;
     screenText(b, 10 * dpr, y, line, size * 0.85, col, 1.1 * dpr);
     y += rowH;
   }
@@ -293,27 +294,45 @@ function drawStats(b: DynBatch, st: SceneState, title: string, w: number, h: num
   screenText(b, 12 * dpr, y, title, size * 1.15, [0.85, 0.92, 1, 1], 1.4 * dpr);
   if (!s) return;
   y += size * 3;
-  const sides: Side[] = ['USA', 'USSR'];
-  const colW = (w - 36 * dpr) / 2;
+  // one column per faction: yours first, then the rest in scenario order
+  const all: Side[] = st.world?.factions?.map((f) => f.id) ?? ['USA', 'USSR'];
+  const sides: Side[] = st.role === 'SPECTATOR' ? all : [st.role, ...all.filter((f) => f !== st.role)];
+  const colW = (w - 12 * dpr * (sides.length + 1)) / sides.length;
+  // narrow columns (many factions, small windows): smaller text, values under their labels, short labels
+  const narrow = colW < 260 * dpr;
+  const fs = narrow ? Math.max(4.5 * dpr, Math.min(size, colW / 15)) : size;
   sides.forEach((side, i) => {
     const x0 = 12 * dpr + i * (colW + 12 * dpr);
     let yy = y;
-    const col = side === 'USA' ? COL.usa : COL.ussr;
+    const col = sideCol(side);
+    if (!s.score[side]) return;
+    const size = fs;
+    // shrink a value until it fits the column
+    const fit = (v: string, sz: number) => Math.min(sz, (sz * (colW - 6 * dpr)) / Math.max(1, textWidth(v, sz)));
+    const kv = (k: string, v: string, c: number[]) => {
+      screenText(b, x0, yy, k, size * 0.8, COL.dim, 1 * dpr);
+      if (narrow) { yy += size * 1.25; screenText(b, x0, yy, v, fit(v, size * 0.8), c, 1.1 * dpr); }
+      else screenText(b, x0 + colW - 4 * dpr, yy, v, size * 0.8, c, 1.1 * dpr, 1);
+      yy += size * 1.8;
+    };
     const sc = s.score[side];
     const lvl = s.defcon[side];
     const est = st.role !== 'SPECTATOR' && side !== st.role;
-    screenText(b, x0, yy, side + (est ? ' (INTEL ESTIMATE)' : ''), size * 1.2, col, 1.5 * dpr);
+    const stance = st.role === 'SPECTATOR' || side === st.role ? '' : ` · ${stanceOf(st.world, st.role, side).toUpperCase()}`;
+    screenText(b, x0, yy, side + (narrow ? '' : stance) + (est && sides.length <= 2 ? ' (INTEL ESTIMATE)' : ''), size * 1.2, col, 1.5 * dpr);
+    if (narrow && stance) { yy += size * 1.6; screenText(b, x0, yy, stance.slice(3), size * 0.75, COL.dim, 1 * dpr); }
     yy += size * 2.4;
-    screenText(b, x0, yy, `DEFCON ${lvl}  ${DEFCON_NAMES[lvl]}`, size, lvl <= 2 ? COL.red : lvl === 3 ? COL.yellow : COL.green, 1.3 * dpr);
+    screenText(b, x0, yy, narrow ? `DEFCON ${lvl}${est ? ' EST' : ''}` : `DEFCON ${lvl}  ${DEFCON_NAMES[lvl]}`, size, lvl <= 2 ? COL.red : lvl === 3 ? COL.yellow : COL.green, 1.3 * dpr);
     yy += size * 2.2;
     const rows: [string, string, number, number[]][] = [
-      ['POPULATION LOSS', `${(sc.killed / 1000).toFixed(2)}M`, sc.killed / sc.popStart, COL.red],
-      ['STRATEGIC FORCES', `${Math.max(0, sc.forcesStart - sc.forcesLost)} / ${sc.forcesStart} RV`, Math.max(0, sc.forcesStart - sc.forcesLost) / Math.max(1, sc.forcesStart), col],
-      ['WARHEADS LAUNCHED', String(sc.warheadsLaunched), sc.warheadsLaunched / Math.max(1, sc.forcesStart), COL.yellow],
+      [narrow ? 'POP. LOSS' : 'POPULATION LOSS', `${(sc.killed / 1000).toFixed(2)}M`, sc.killed / Math.max(1, sc.popStart), COL.red],
+      [narrow ? 'FORCES' : 'STRATEGIC FORCES', `${Math.max(0, sc.forcesStart - sc.forcesLost)}/${sc.forcesStart} RV`, Math.max(0, sc.forcesStart - sc.forcesLost) / Math.max(1, sc.forcesStart), col],
+      [narrow ? 'LAUNCHED' : 'WARHEADS LAUNCHED', String(sc.warheadsLaunched), sc.warheadsLaunched / Math.max(1, sc.forcesStart), COL.yellow],
     ];
     for (const [label, val, frac, c] of rows) {
       screenText(b, x0, yy, label, size * 0.8, COL.dim, 1 * dpr);
-      screenText(b, x0 + colW - 4 * dpr, yy, val, size * 0.9, c, 1.2 * dpr, 1);
+      if (narrow) { yy += size * 1.25; screenText(b, x0, yy, val, fit(val, size * 0.9), c, 1.2 * dpr); }
+      else screenText(b, x0 + colW - 4 * dpr, yy, val, size * 0.9, c, 1.2 * dpr, 1);
       yy += size * 1.4;
       bar(b, x0, yy, colW - 4 * dpr, size * 1.1, frac, c, dpr);
       yy += size * 2.4;
@@ -330,11 +349,7 @@ function drawStats(b: DynBatch, st: SceneState, title: string, w: number, h: num
         ['AIR FORCE', `${sum('airbase', (u) => u.aircraft ?? 0)} BMR GND · ${sum('bomber', (u) => u.aircraft ?? 0)} AIR · ${sum('afb_int', (u) => u.interceptors ?? 0)} INT`],
         ['GROUND C2 / RADAR', `${units.filter((u) => u.kind === 'command').length} CP · ${units.filter((u) => u.kind === 'radar').length} RADAR`],
       ];
-      for (const [k, v] of lines) {
-        screenText(b, x0, yy, k, size * 0.8, COL.dim, 1 * dpr);
-        screenText(b, x0 + colW - 4 * dpr, yy, v, size * 0.8, col, 1.1 * dpr, 1);
-        yy += size * 1.8;
-      }
+      for (const [k, v] of lines) kv(narrow ? k.split(' ')[0] : k, v, col);
     } else {
       const known = s.contacts.filter((c) => c.status !== 'destroyed');
       const cnt = (k: string) => known.filter((c) => c.kind === k).length;
@@ -342,18 +357,16 @@ function drawStats(b: DynBatch, st: SceneState, title: string, w: number, h: num
         ['KNOWN ICBM FIELDS', String(cnt('silo'))], ['BOMBER CONTACTS', String(cnt('bomber'))],
         ['NAVAL CONTACTS', `${cnt('carrier')} SURFACE · ${cnt('ssbn') + cnt('ssn')} SUB`], ['DESTROYED TARGETS', String(s.contacts.filter((c) => c.status === 'destroyed').length)],
       ];
-      for (const [k, v] of lines) {
-        screenText(b, x0, yy, k, size * 0.8, COL.dim, 1 * dpr);
-        screenText(b, x0 + colW - 4 * dpr, yy, v, size * 0.8, col, 1.1 * dpr, 1);
-        yy += size * 1.8;
-      }
+      const short: Record<string, string> = {'KNOWN ICBM FIELDS': 'ICBM FIELDS', 'BOMBER CONTACTS': 'BOMBERS', 'NAVAL CONTACTS': 'NAVAL', 'DESTROYED TARGETS': 'DESTROYED'};
+      for (const [k, v] of lines) kv(narrow ? short[k] ?? k : k, v, col);
     }
     const ai = s.ai[side];
     if (ai) {
       yy += size;
-      screenText(b, x0, yy, `AI ${ai.provider.toUpperCase()}:${ai.model.toUpperCase()}`, size * 0.8, [0.75, 0.55, 1, 1], 1.1 * dpr);
+      const who = narrow ? `AI ${ai.model.toLowerCase().includes('doctrine') ? 'DOCTRINE' : ai.provider.toUpperCase()}` : `AI ${ai.provider.toUpperCase()}:${ai.model.toUpperCase()}`;
+      screenText(b, x0, yy, who, size * 0.8, [0.75, 0.55, 1, 1], 1.1 * dpr);
       yy += size * 1.6;
-      screenText(b, x0, yy, `${ai.thinking ? 'THINKING' : 'IDLE'} · ${ai.calls} CALLS · $${ai.costUsd.toFixed(3)}`, size * 0.75, ai.lastError ? COL.red : COL.dim, 1 * dpr);
+      if (!narrow || ai.calls) screenText(b, x0, yy, `${ai.thinking ? 'THINKING' : 'IDLE'} · ${ai.calls} CALLS · $${ai.costUsd.toFixed(3)}`, size * 0.75, ai.lastError ? COL.red : COL.dim, 1 * dpr);
     }
   });
   if (s.over) screenText(b, w / 2, h - 20 * dpr, `SIMULATION COMPLETE — ${s.over.reason}`, size * 1.1, COL.white, 1.6 * dpr, 0.5);
@@ -379,9 +392,13 @@ function drawStrip(b: DynBatch, st: SceneState, w: number, h: number, dpr: numbe
   const role = st.role;
   // DEFCON lamps: five hatched blocks, the current level lit
   const lampCols: Record<number, number[]> = { 5: [0.3, 0.9, 1, 1], 4: [0.3, 1, 0.5, 1], 3: [1, 0.85, 0.2, 1], 2: [1, 0.5, 0.15, 1], 1: [1, 0.15, 0.1, 1] };
-  const sides: Side[] = role === 'USSR' ? ['USSR', 'USA'] : ['USA', 'USSR'];
+  // your DEFCON, then the adversaries at the highest readiness (all factions for spectators, up to 5)
+  const all: Side[] = st.world?.factions?.map((f) => f.id) ?? ['USA', 'USSR'];
+  const sides: Side[] = role === 'SPECTATOR'
+    ? all.slice(0, 5)
+    : [role, ...hostilesOf(st.world, role).sort((a, b) => (s.defcon[a] ?? 5) - (s.defcon[b] ?? 5))].slice(0, all.length <= 2 ? 2 : 3);
   for (const side of sides) {
-    screenText(b, x, yL, `${side} DEFCON${role !== 'SPECTATOR' && side !== role ? ' EST' : ''}`, lbl, side === 'USA' ? COL.usa : COL.ussr, 1 * dpr);
+    screenText(b, x, yL, `${side} DEFCON${role !== 'SPECTATOR' && side !== role ? ' EST' : ''}`, lbl, sideCol(side), 1 * dpr);
     const lw = 10 * dpr * fit, lh = h * 0.32;
     for (let lvl = 5; lvl >= 1; lvl--) {
       const lx = x + (5 - lvl) * (lw + 3 * dpr);
@@ -399,8 +416,11 @@ function drawStrip(b: DynBatch, st: SceneState, w: number, h: number, dpr: numbe
   item('BMR CONTACTS', String(s.threat.bombers).padStart(2, '0'), COL.red);
   item('SUB CONTACTS', String(s.threat.subs).padStart(2, '0'), COL.red);
   const kill = (side: Side) => String(Math.round(s.score[side].killed)).padStart(6, '0');
-  item('USA CASUALTIES K', kill('USA'), COL.red);
-  item('USSR CASUALTIES K', kill('USSR'), COL.red);
+  if (all.length <= 2) for (const side of all) item(`${side} CASUALTIES K`, kill(side), COL.red);
+  else {
+    if (role !== 'SPECTATOR') item('YOUR CASUALTIES K', kill(role), COL.red);
+    item('WORLD CASUALTIES K', String(Math.round(all.reduce((a, f) => a + (s.score[f]?.killed ?? 0), 0))).padStart(6, '0'), COL.red);
+  }
   item('TIME RATE', s.paused ? '--' : String(s.speed).padStart(2, ' '), s.paused ? COL.yellow : [1, 0.6, 0.2, 1]);
   if (s.over && x < w - 200 * dpr) screenText(b, x, h / 2, s.over.reason, lbl * 1.4, COL.white, 1.4 * dpr);
   if (st.plan) screenText(b, w - 8 * dpr, yL, `ADVISOR PLAN: ${st.plan.cmds.map(describeCommand).join(' · ')}`.slice(0, 120), lbl, COL.plan, 1 * dpr, 1);

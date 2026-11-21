@@ -19,7 +19,8 @@ import './geo.ts';
 
 export interface MatchConfig {
   code: string;
-  scenario: '1983';
+  /** scenario id: '1983' (two players) or 'modern' (five factions, AI fills empty seats) */
+  scenario: string;
   /** human: a friend plays the other side · rules: built-in doctrine AI · byok: LLM via the host's own key */
   opponent: 'human' | 'rules' | 'byok';
   hostSide: Side;
@@ -32,7 +33,7 @@ export interface MatchConfig {
   origin: string;
 }
 
-export type CreateOptions = Partial<Pick<MatchConfig, 'opponent' | 'hostSide' | 'speed' | 'personality' | 'host'>>;
+export type CreateOptions = Partial<Pick<MatchConfig, 'scenario' | 'opponent' | 'hostSide' | 'speed' | 'personality' | 'host'>>;
 
 interface Conn {
   role: Role;
@@ -53,7 +54,6 @@ const ABANDON_MS = 24 * 3600_000; // delete a match a day after the last player 
 const AI_TIMEOUT_MS = 45_000;
 const MAX_EVENTS = 1500;
 const SEAT_GRACE_MS = 120_000; // a dropped player's seat stays theirs this long
-const SIDES: Side[] = ['USA', 'USSR'];
 
 export class MatchRoom extends DurableObject<Env> {
   private cfg?: MatchConfig;
@@ -66,7 +66,7 @@ export class MatchRoom extends DurableObject<Env> {
   private tickN = 0;
   private lastPersist = 0;
   private listeners = new Set<(g: Game) => void>();
-  private opponent?: AiOpponent;
+  private opponents: AiOpponent[] = [];
   private plans = new Map<string, { side: Side; plan: PlanProposal }>();
   private jobs = new Map<string, { resolve: (r: LlmResult) => void; reject: (e: Error) => void; ws: WebSocket; timer: ReturnType<typeof setTimeout> }>();
   private seq = 0;
@@ -95,7 +95,7 @@ export class MatchRoom extends DurableObject<Env> {
   async init(code: string, opts: CreateOptions, origin: string): Promise<MatchInfo | null> {
     if (this.cfg) return null;
     this.cfg = {
-      code, scenario: '1983',
+      code, scenario: opts.scenario ?? '1983',
       opponent: opts.opponent ?? 'human',
       hostSide: opts.hostSide ?? 'USA',
       speed: Math.min(60, Math.max(1, opts.speed ?? 10)),
@@ -105,7 +105,8 @@ export class MatchRoom extends DurableObject<Env> {
       created: Date.now(),
       origin,
     };
-    this.game = new Game(this.cfg.seed);
+    this.game = new Game(this.cfg.seed, undefined, this.cfg.scenario);
+    if (!this.game.faction(this.cfg.hostSide)?.playable) this.cfg.hostSide = this.game.sc.defaultSides[0];
     this.game.s.speed = this.cfg.speed;
     this.setupAi();
     await this.ctx.storage.put('cfg', this.cfg);
@@ -130,12 +131,45 @@ export class MatchRoom extends DurableObject<Env> {
 
   private info(): MatchInfo {
     const c = this.cfg!;
-    return { code: c.code, scenario: c.scenario, opponent: c.opponent === 'byok' ? 'your AI key' : c.opponent, created: c.created, host: c.host };
+    return { code: c.code, scenario: this.game?.sc.name ?? c.scenario, opponent: c.opponent === 'byok' ? 'your AI key' : c.opponent, created: c.created, host: c.host };
   }
 
-  /** Side played by an AI in this match (none in human-vs-human). */
+  private get factions(): Side[] {
+    return this.game?.factions ?? ['USA', 'USSR'];
+  }
+
+  /** The host's main adversary: the first hostile faction in scenario order. */
+  private mainEnemy(): Side {
+    const g = this.game!;
+    const host = this.cfg!.hostSide;
+    const [a, b] = g.sc.defaultSides;
+    const paired = host === a ? b : host === b ? a : undefined;
+    if (paired && g.hostile(host, paired)) return paired;
+    return g.hostilesOf(host)[0] ?? enemyOf(host);
+  }
+
+  /**
+   * A side permanently reserved for the AI. Only in two-player scenarios against an AI; in
+   * multi-faction scenarios every seat stays open and the AI simply covers empty ones.
+   */
   private aiSide(): Side | null {
-    return this.cfg && this.cfg.opponent !== 'human' ? enemyOf(this.cfg.hostSide) : null;
+    if (!this.cfg || this.factions.length > 2 || this.cfg.opponent === 'human') return null;
+    return this.mainEnemy();
+  }
+
+  /** Is the AI playing this side right now? */
+  private aiPlays(side: Side): boolean {
+    if (this.factions.length <= 2) return side === this.aiSide();
+    const seat = this.seats[side];
+    return !seat || !this.held(side);
+  }
+
+  /** seat order offered to newcomers: the host's side, then its adversaries, then everyone else */
+  private seatPreference(): Side[] {
+    const host = this.cfg!.hostSide;
+    const g = this.game!;
+    const order = [host, this.mainEnemy(), ...g.hostilesOf(host), ...this.factions];
+    return [...new Set(order)].filter((f) => g.faction(f)?.playable !== false);
   }
 
   // ------------------------------------------------------------------ WebSocket lifecycle
@@ -281,7 +315,7 @@ export class MatchRoom extends DurableObject<Env> {
       }
       case 'newgame': {
         if (!this.isHost(c)) return this.send(ws, { t: 'result', ok: false, msg: 'ONLY THE HOST CAN RESTART THE MATCH' });
-        this.game = new Game(m.seed ?? Math.floor(Math.random() * 1e9));
+        this.game = new Game(m.seed ?? Math.floor(Math.random() * 1e9), undefined, this.cfg!.scenario);
         this.game.s.speed = this.cfg!.speed;
         this.setupAi();
         for (const [sock, cc] of this.conns) {
@@ -312,7 +346,7 @@ export class MatchRoom extends DurableObject<Env> {
     const origin = this.cfg!.origin;
     const code = this.cfg!.code;
     const side = role === 'SPECTATOR' ? this.cfg!.hostSide : role;
-    const other = enemyOf(side);
+    const other = this.factions.length > 2 ? 'a free seat' : this.game!.hostilesOf(side)[0] ?? enemyOf(side);
     const links = [
       { label: `Your side (${side}) on another screen or phone`, url: makeMatchLink(origin, code, side), kind: 'web' as const },
       { label: 'Spectator wall (TV / big screen)', url: `${makeMatchLink(origin, code, 'SPECTATOR')}&preset=wall`, kind: 'web' as const },
@@ -331,17 +365,17 @@ export class MatchRoom extends DurableObject<Env> {
    *  - a busy seat sends the newcomer to the free human side, otherwise to the spectators.
    */
   private seat(c: Live, want: Role): Role {
-    const mine = SIDES.find((s) => this.seats[s]?.player === c.player);
+    const mine = this.factions.find((f) => this.seats[f]?.player === c.player);
     if (want === 'SPECTATOR') {
-      // spectators see both sides; in a human-vs-human match a seated player can't also watch as one
+      // spectators see every side; in a match between people a seated player can't also watch as one
       return mine && this.cfg!.opponent === 'human' ? mine : 'SPECTATOR';
     }
     if (mine) return this.claim(mine, c);
-    if (want === this.aiSide()) want = enemyOf(want);
-    if (this.taken(want, c.player)) {
-      const other = enemyOf(want);
-      if (other === this.aiSide() || this.taken(other, c.player)) return 'SPECTATOR';
-      want = other;
+    const free = (f: Side) => f !== this.aiSide() && !this.taken(f, c.player) && this.game!.faction(f)?.playable !== false;
+    if (!this.factions.includes(want) || !free(want)) {
+      const alt = this.seatPreference().find(free);
+      if (!alt) return 'SPECTATOR';
+      want = alt;
     }
     return this.claim(want, c);
   }
@@ -364,12 +398,18 @@ export class MatchRoom extends DurableObject<Env> {
   }
 
   private defaultRole(c: Live): Role {
-    const mine = SIDES.find((s) => this.seats[s]?.player === c.player);
+    const mine = this.factions.find((f) => this.seats[f]?.player === c.player);
     if (mine) return mine;
-    const host = this.cfg!.hostSide;
-    if (!this.taken(host, c.player)) return host;
-    const other = enemyOf(host);
-    return other === this.aiSide() || this.taken(other, c.player) ? 'SPECTATOR' : other;
+    const alt = this.seatPreference().find((f) => f !== this.aiSide() && !this.taken(f, c.player));
+    return alt ?? 'SPECTATOR';
+  }
+
+  /** a human holds this seat (online, or reconnecting within the grace period) */
+  private held(side: Side): boolean {
+    const s = this.seats[side];
+    if (!s) return false;
+    if ([...this.conns.values()].some((o) => o.authed && o.player === s.player)) return true;
+    return Date.now() - Math.max(s.leftAt ?? 0, this.bootAt) < SEAT_GRACE_MS;
   }
 
   private isHost(c: Live) {
@@ -385,21 +425,33 @@ export class MatchRoom extends DurableObject<Env> {
 
   private setupAi() {
     this.listeners.clear();
-    this.opponent = undefined;
-    const side = this.aiSide();
-    if (!side || !this.game) return;
-    const host: AiHost = {
-      game: this.game,
-      submit: (s: Side, cmd: Command, source = 'ai') => {
-        const res = this.game!.apply(s, cmd);
-        if (res.ok && cmd.op !== 'hold') this.game!.emit({ kind: 'ai', visibleTo: [s], side: s, text: `[${source.toUpperCase()}] ${this.game!.describe(cmd)} — ${res.msg}` });
-        return res;
-      },
-      onTick: (fn) => { this.listeners.add(fn); return () => this.listeners.delete(fn); },
-    };
-    const provider: LlmProvider | 'rules' = this.cfg!.opponent === 'byok' ? this.relayProvider('opponent', side) : 'rules';
-    this.opponent = new AiOpponent(host, side, provider, { personality: this.cfg!.personality, cadenceSec: 90 });
-    this.opponent.attach();
+    this.opponents = [];
+    if (!this.game) return;
+    const g = this.game;
+    // two-player scenarios: one AI for the reserved side; multi-faction: one per faction, active only
+    // while no human holds that seat (a friend who joins takes over; if they leave for good the AI resumes)
+    const sides = this.factions.length > 2 ? this.factions : this.aiSide() ? [this.aiSide()!] : [];
+    for (const side of sides) {
+      const host: AiHost = {
+        game: g,
+        submit: (s: Side, cmd: Command, source = 'ai') => {
+          const res = this.game!.apply(s, cmd);
+          if (res.ok && cmd.op !== 'hold') this.game!.emit({ kind: 'ai', visibleTo: [s], side: s, text: `[${source.toUpperCase()}] ${this.game!.describe(cmd)} — ${res.msg}` });
+          return res;
+        },
+        onTick: (fn) => {
+          const gated = (gg: Game) => { if (this.aiPlays(side)) fn(gg); };
+          this.listeners.add(gated);
+          return () => this.listeners.delete(gated);
+        },
+      };
+      const byok = this.cfg!.opponent === 'byok' && side === this.mainEnemy();
+      const provider: LlmProvider | 'rules' = byok ? this.relayProvider('opponent', side) : 'rules';
+      const personality = this.factions.length > 2 && !g.hostile(this.cfg!.hostSide, side) ? 0.4 : this.cfg!.personality;
+      const ai = new AiOpponent(host, side, provider, { personality, cadenceSec: 90 });
+      ai.attach();
+      this.opponents.push(ai);
+    }
   }
 
   /**
@@ -527,7 +579,9 @@ export class MatchRoom extends DurableObject<Env> {
     const list = [...this.conns.entries()].filter(([, c]) => c.authed);
     for (const [ws, me] of list) {
       const players: RosterEntry[] = list.map(([w, c]) => ({ name: c.name, role: c.role, kind: c.kind, ai: c.ai, you: w === ws || undefined }));
-      if (this.aiSide()) players.push({ name: this.cfg!.opponent === 'rules' ? 'DOCTRINE AI' : 'AI OPPONENT', role: this.aiSide()!, kind: 'ai', ai: true });
+      for (const f of this.factions) {
+        if (this.aiPlays(f)) players.push({ name: this.cfg!.opponent === 'byok' && f === this.mainEnemy() ? 'AI (YOUR KEY)' : 'AI', role: f, kind: 'ai', ai: true });
+      }
       this.send(ws, { t: 'roster', players });
       void me;
     }
