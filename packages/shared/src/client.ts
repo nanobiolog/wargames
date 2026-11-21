@@ -41,6 +41,8 @@ export class GameClient {
     chat: new Set<Listener<{ from: string; role: Role; text: string }>>(),
   };
   private closedByUser = false;
+  private gen = 0;
+  private retry?: ReturnType<typeof setTimeout>;
 
   constructor(private kind: 'tui' | 'gui' | 'mcp' | 'other') {}
 
@@ -53,19 +55,29 @@ export class GameClient {
     for (const fn of this.ls[ev] as Set<Listener<unknown>>) fn(v);
   }
 
+  /**
+   * Connect to a session. Only one socket is ever live: connecting again (e.g. accepting an invite
+   * while already in a match) closes the previous socket, and events from stale sockets are ignored.
+   * Before this, a second connect() left the old socket running, both fed snapshots into this client
+   * and the display alternated between the two seats (USA ⇄ USSR / spectator flicker).
+   */
   connect(link: string, role?: Role): Promise<void> {
     const p = parseLink(link);
     if (!p) return Promise.reject(new Error(`invalid link: ${link}`));
+    this.detach();
     this.link = link;
     this.closedByUser = false;
+    const gen = ++this.gen;
     return new Promise((resolve, reject) => {
       let settled = false;
       const ws = new WebSocket(wsUrl(p));
       this.ws = ws;
+      const live = () => gen === this.gen;
       ws.addEventListener('open', () => {
-        this.raw({ t: 'hello', token: p.token, role: role ?? p.role, client: this.kind, ...this.identity });
+        if (live()) this.raw({ t: 'hello', token: p.token, role: role ?? p.role, client: this.kind, ...this.identity });
       });
       ws.addEventListener('message', (ev: MessageEvent) => {
+        if (!live()) return;
         const msg = JSON.parse(String(ev.data)) as ServerMsg;
         if (msg.t === 'welcome' && !settled) {
           settled = true;
@@ -78,22 +90,36 @@ export class GameClient {
         this.onMsg(msg);
       });
       ws.addEventListener('error', () => {
-        if (!settled) {
+        if (live() && !settled) {
           settled = true;
           reject(new Error(`cannot reach game server at ${p.host}:${p.port}`));
         }
       });
       ws.addEventListener('close', () => {
+        if (!live()) return;
         this.connected = false;
         this.fire('status', 'disconnected');
-        if (!this.closedByUser && settled) setTimeout(() => this.connect(link, role).catch(() => {}), 1500 + Math.random() * 1500);
+        if (this.closedByUser || !settled) return;
+        // come back to the seat we actually hold, not the one first asked for
+        const again = this.role ?? role;
+        this.retry = setTimeout(() => { if (live()) this.connect(link, again).catch(() => {}); }, 1500 + Math.random() * 1500);
       });
     });
   }
 
+  /** Drop the current socket without triggering a reconnect. */
+  private detach() {
+    clearTimeout(this.retry);
+    this.gen++;
+    const old = this.ws;
+    this.ws = undefined;
+    if (old && old.readyState <= 1) { try { old.close(); } catch { /* ignore */ } }
+    this.connected = false;
+  }
+
   close() {
     this.closedByUser = true;
-    this.ws?.close();
+    this.detach();
   }
 
   private raw(m: ClientMsg) {

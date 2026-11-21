@@ -201,6 +201,36 @@ button.small { padding: 2px 7px; font-size: 11px; }
 }
 @media (max-width: 700px) {
   .lobby .cols { grid-template-columns: 1fr; }
-  .matchbar { max-width: 96vw; top: auto; bottom: calc(var(--hud-h, 0px) + 6px); }
+  .matchbar { max-width: 96vw; top: calc(var(--hud-h, 48px) + 4px); left: 4px; }
   .matchbar input.chat, .matchbar .you { display: none; }
 }
+.sharesheet {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(440px, 94vw); max-height: 94vh; overflow: auto;
+  padding: 16px 18px; z-index: 12; background: rgba(2, 8, 20, 0.97); border: 1px solid #5cff8a; box-shadow: 0 0 40px rgba(92, 255, 138, 0.35);
+}
+.sharesheet .ph { color: #fff; font-size: 16px; display: flex; justify-content: space-between; text-shadow: 0 0 10px #4aa8ff; }
+.sharesheet .bigcode { display: flex; gap: 8px; justify-content: center; margin: 14px 0 6px; cursor: pointer; }
+.sharesheet .bigcode span {
+  width: 52px; height: 62px; display: grid; place-items: center; font-size: 34px; color: #ffd76a;
+  border: 1px solid #ffd76a; text-shadow: 0 0 12px rgba(255, 215, 106, 0.8); background: #070b02;
+}
+.sharesheet .center { text-align: center; }
+.sharesheet .line { display: flex; gap: 8px; margin: 8px 0; }
+.sharesheet button.big { flex: 1; padding: 12px; font-size: 14px; border-color: #5cff8a; color: #b8ffd0; }
+.sharesheet .qr { display: flex; justify-content: center; margin: 8px 0; }
+.sharesheet .qr svg { width: min(200px, 50vw); height: auto; }
+.sharesheet .sec { border-top: 1px solid #1d4f8f; margin-top: 10px; padding-top: 8px; }
+.sharesheet .lbl { color: #6fc0ff; margin-bottom: 6px; }
+.sharesheet .friend { display: flex; gap: 8px; align-items: center; padding: 3px 0; }
+.sharesheet .friend b { flex: 1; }
+.sharesheet .dot { width: 8px; height: 8px; border-radius: 50%; background: #334; }
+.sharesheet .dot.on { background: #5cff8a; box-shadow: 0 0 6px #5cff8a; }
+.sharesheet .tag { color: #ffd76a; letter-spacing: 0.2em; }
+.sharesheet input { font: inherit; color: #fff; background: #01060f; border: 1px solid #2a6fd0; padding: 6px; flex: 1; min-width: 0; }
+.sharesheet details { margin-top: 10px; border-top: 1px solid #1d4f8f; padding-top: 8px; }
+.sharesheet summary { cursor: pointer; color: #6fc0ff; }
+.sharesheet .hint { color: #7fa9cc; line-height: 1.5; font-size: 11px; }
+.matchbar .invitebtn { border-color: #5cff8a; color: #b8ffd0; }
+.matchbar > * { order: 2; flex-shrink: 0; }
+.matchbar .code { order: 0; }
+.matchbar .invitebtn { order: 1; }

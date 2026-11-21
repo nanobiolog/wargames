@@ -10,6 +10,7 @@ import {
   type AiJob, type GameClient, type RosterEntry, type Side,
 } from '@coldlaunch/shared';
 import type { FxSettings } from './gl.ts';
+import QRCode from 'qrcode';
 
 export interface Store {
   get<T>(k: string, d: T): T;
@@ -85,6 +86,7 @@ export class Online {
   private lobby: HTMLElement;
   private settingsBox: HTMLElement;
   private bar: HTMLElement;
+  private shareBox: HTMLElement;
   private inbox?: WebSocket;
   private usage = { calls: 0, inTok: 0, outTok: 0, cost: 0 };
   private hb = 0;
@@ -102,7 +104,9 @@ export class Online {
     this.lobby = h('div', 'lobby hidden');
     this.settingsBox = h('div', 'settings hidden');
     this.bar = h('div', 'matchbar hidden');
-    root.append(this.lobby, this.settingsBox, this.bar);
+    this.shareBox = h('div', 'sharesheet hidden');
+    root.append(this.lobby, this.settingsBox, this.bar, this.shareBox);
+    this.adoptPairing();
     this.applyIdentity();
 
     const c = host.client;
@@ -112,6 +116,7 @@ export class Online {
     c.on('welcome', () => { this.renderBar(c.roster); this.lobby.classList.add('hidden'); });
     // Heartbeat while the clock runs: keeps the match's Durable Object topped up on CPU between
     // orders. Paused or finished matches send nothing, so they can hibernate.
+    window.addEventListener('resize', () => this.placeBar());
     this.hb = window.setInterval(() => {
       const s = c.snap;
       if (c.connected && c.match && s && !s.paused && !s.over) c.ping();
@@ -182,6 +187,79 @@ export class Online {
     }
   }
 
+  // ------------------------------------------------------------------ pairing your own screens
+
+  /**
+   * A "my other screen" link carries ?pair=<player id>&name=<callsign>. Opening it makes this
+   * browser the same player, so it joins your side instead of being treated as a newcomer.
+   * The parameters are removed from the address bar straight away.
+   */
+  private adoptPairing() {
+    const url = new URL(location.href);
+    const pair = url.searchParams.get('pair');
+    if (!pair || !/^[\w-]{6,40}$/.test(pair)) return;
+    this.id.player = pair;
+    this.id.name = cleanCallsign(url.searchParams.get('name') ?? '') ?? this.id.name;
+    this.host.store.set('identity', this.id);
+    url.searchParams.delete('pair');
+    url.searchParams.delete('name');
+    history.replaceState(null, '', url);
+    window.setTimeout(() => this.host.toast(`THIS SCREEN IS LINKED TO ${this.id.name}`, 'hot'), 500);
+  }
+
+  private pairLink(): string {
+    const c = this.host.client;
+    const q = new URLSearchParams({ m: c.match!.code, pair: this.id.player, name: this.id.name });
+    if (c.role && c.role !== 'SPECTATOR') q.set('role', c.role);
+    return `${location.origin}/?${q}`;
+  }
+
+  // ------------------------------------------------------------------ share sheet (one place for every invite)
+
+  /** Returns false when not in an online match (callers then fall back to the LAN share panel). */
+  openShare(): boolean {
+    const c = this.host.client;
+    if (!this.available || !c.match) return false;
+    const code = c.match.code;
+    const invite = makeMatchLink(location.origin, code); // no role: the server seats them on the free side
+    const vsHuman = !c.aiOpponent;
+    const S = this.shareBox;
+    S.innerHTML = `
+      <div class="ph">INVITE <button class="small close">×</button></div>
+      <div class="bigcode" title="Tap to copy">${code.split('').map((ch) => `<span>${ch}</span>`).join('')}</div>
+      <p class="hint center">${vsHuman ? 'Your friend opens the link or types the code at' : 'Anyone with the link can watch at'} <b>${esc(location.host)}</b>${vsHuman ? ' — no sign-up, they get the free side.' : '.'}</p>
+      <div class="line"><button class="big native">SHARE…</button><button class="big copy">COPY LINK</button></div>
+      <div class="qr main"></div>
+      <div class="sec friends2"></div>
+      <details class="more"><summary>MY OTHER SCREENS &amp; TV</summary>
+        <p class="hint">Scan with <b>your own</b> phone or tablet to command <b>your side</b> from it as ${esc(this.id.name)} (it links that device to you).</p>
+        <div class="qr pair"></div>
+        <div class="line"><button class="small copypair">COPY MY-SCREEN LINK</button><button class="small newwin">OPEN HERE IN A NEW TAB</button></div>
+        <p class="hint">Big screen / TV that shows everything (spectator):</p>
+        <div class="line"><button class="small copytv">COPY TV LINK</button></div>
+      </details>`;
+    const q = <T extends HTMLElement>(sel: string) => S.querySelector(sel) as T;
+    const copy = (text: string, msg: string) => void navigator.clipboard?.writeText(text).then(() => this.host.toast(msg, 'hot'), () => window.prompt('Copy this link', text));
+    q<HTMLButtonElement>('.close').onclick = () => S.classList.add('hidden');
+    q<HTMLElement>('.bigcode').onclick = () => copy(code, `CODE ${code} COPIED`);
+    q<HTMLButtonElement>('.copy').onclick = () => copy(invite, 'INVITE LINK COPIED');
+    const nat = q<HTMLButtonElement>('.native');
+    if (navigator.share) {
+      nat.onclick = () => void navigator.share({ title: 'COLD LAUNCH', text: `Join my COLD LAUNCH match — code ${code}`, url: invite }).catch(() => {});
+    } else nat.remove();
+    q<HTMLButtonElement>('.copypair').onclick = () => copy(this.pairLink(), 'LINK FOR YOUR OWN SCREENS COPIED');
+    q<HTMLButtonElement>('.newwin').onclick = () => window.open(makeMatchLink(location.origin, code, c.role === 'SPECTATOR' ? undefined : c.role), '_blank');
+    q<HTMLButtonElement>('.copytv').onclick = () => copy(`${makeMatchLink(location.origin, code, 'SPECTATOR')}&preset=wall`, 'TV LINK COPIED');
+    const qr = (el: HTMLElement, text: string) => void QRCode.toString(text, { type: 'svg', margin: 2, errorCorrectionLevel: 'L', color: { dark: '#000000', light: '#ffffff' } }).then((svg) => { el.innerHTML = svg; });
+    qr(q<HTMLElement>('.qr.main'), invite);
+    qr(q<HTMLElement>('.qr.pair'), this.pairLink());
+    this.renderFriends(q<HTMLElement>('.friends2'));
+    void this.pollFriends();
+    S.classList.remove('hidden');
+    this.lobby.classList.add('hidden');
+    return true;
+  }
+
   // ------------------------------------------------------------------ lobby
 
   showLobby(note = '') {
@@ -198,7 +276,7 @@ export class Online {
       <div class="cols">
         <div class="sec">
           <div class="lbl">JOIN A MATCH</div>
-          <div class="line"><input class="code" maxlength="6" placeholder="K7M2Q" value="${esc(pending ?? '')}" autocapitalize="characters" autocomplete="off"></div>
+          <div class="line"><input class="code" placeholder="K7M2Q" value="${esc(pending ?? '')}" autocapitalize="characters" autocomplete="off"></div>
           <div class="line">
             <select class="joinrole"><option value="">Any free seat</option><option>USA</option><option>USSR</option><option value="SPECTATOR">Watch (spectator)</option></select>
             <button class="big join">JOIN</button>
@@ -246,7 +324,8 @@ export class Online {
     syncOpp();
     const join = () => {
       saveName();
-      const code = normalizeCode(q<HTMLInputElement>('.code').value);
+      const raw = q<HTMLInputElement>('.code').value;
+      const code = normalizeCode(raw.match(/[?&]m=([2-9A-Za-z]{5})|\/m\/([2-9A-Za-z]{5})/)?.slice(1).find(Boolean) ?? raw);
       if (!code) return this.host.toast('MATCH CODES ARE 5 CHARACTERS, E.G. K7M2Q', 'bad');
       const role = q<HTMLSelectElement>('.joinrole').value as Side | 'SPECTATOR' | '';
       void this.join(code, role || undefined);
@@ -262,8 +341,9 @@ export class Online {
       });
       const m = (await res.json()) as { code?: string; error?: string };
       if (!m.code) return this.host.toast(`COULD NOT CREATE MATCH: ${m.error ?? res.status}`, 'bad');
-      this.host.toast(`MATCH ${m.code} CREATED — SHARE THE CODE`, 'hot');
-      void this.join(m.code, q<HTMLSelectElement>('.side').value as Side);
+      await this.join(m.code, q<HTMLSelectElement>('.side').value as Side);
+      if (opp.value === 'human') this.openShare(); // next step is always "send it to a friend"
+      else this.host.toast(`MATCH ${m.code} STARTED`, 'hot');
     };
     q<HTMLButtonElement>('.settingsbtn').onclick = () => this.openSettings();
     q<HTMLButtonElement>('.local').onclick = () => { L.classList.add('hidden'); this.host.showLocalConnect('Paste the session link printed in your terminal.'); };
@@ -284,17 +364,21 @@ export class Online {
 
   // ------------------------------------------------------------------ friends & invites
 
-  private renderFriends() {
-    const box = this.lobby.querySelector('.friends') as HTMLElement | null;
-    if (!box) return;
+  private renderFriends(target?: HTMLElement) {
+    for (const box of target ? [target] : [this.lobby.querySelector('.friends'), this.shareBox.querySelector('.friends2')]) {
+      if (box) this.renderFriendsInto(box as HTMLElement);
+    }
+  }
+
+  private renderFriendsInto(box: HTMLElement) {
     const inMatch = this.host.client.match?.code;
     box.innerHTML = `<div class="lbl">FRIENDS</div>`;
-    if (!this.friends.length) box.append(h('p', 'hint', 'No friends yet. Add a friend tag below; they see your invites live.'));
+    if (!this.friends.length) box.append(h('p', 'hint', `No friends yet. Swap friend tags once (yours is ${this.id.tag}); after that, invites are one tap and pop up on their screen.`));
     for (const f of this.friends) {
       const row = h('div', 'friend');
       row.innerHTML = `<span class="dot ${this.online[f.tag] ? 'on' : ''}"></span><b>${esc(f.name)}</b> <span class="tag">${f.tag}</span>`;
       if (inMatch) {
-        const b = h('button', 'small', 'INVITE');
+        const b = h('button', 'small', this.online[f.tag] ? 'INVITE' : 'INVITE (OFFLINE)');
         b.onclick = () => void this.invite(f.tag);
         row.append(b);
       }
@@ -344,18 +428,29 @@ export class Online {
     ws.onmessage = (ev) => {
       if (ev.data === 'pong') return;
       try {
-        const m = JSON.parse(String(ev.data)) as { t: string; invite?: { from: string; code: string } };
-        if (m.t === 'invite' && m.invite) this.showInvite(m.invite.from, m.invite.code);
+        const m = JSON.parse(String(ev.data)) as { t: string; invite?: { from: string; fromTag: string; code: string } };
+        if (m.t === 'invite' && m.invite) this.showInvite(m.invite.from, m.invite.fromTag, m.invite.code);
       } catch { /* ignore */ }
     };
     ws.onclose = () => { clearInterval(ping); window.setTimeout(() => this.openInbox(), 5000 + Math.random() * 5000); };
   }
 
-  private showInvite(from: string, code: string) {
+  private showInvite(from: string, fromTag: string, code: string) {
+    if (this.host.client.match?.code === code) return; // already there
+    for (const old of this.root.querySelectorAll('.invite')) old.remove();
     const box = h('div', 'invite');
     box.innerHTML = `<b>${esc(from)}</b> invites you to match <b>${esc(code)}</b> `;
     const yes = h('button', 'small', 'JOIN');
-    yes.onclick = () => { box.remove(); void this.join(code); };
+    yes.onclick = () => {
+      box.remove();
+      // accepting makes the inviter a friend, so inviting back is one tap
+      if (/^[2-9A-Z]{5}$/.test(fromTag) && fromTag !== this.id.tag && !this.friends.some((f) => f.tag === fromTag)) {
+        this.friends = [...this.friends, { tag: fromTag, name: cleanCallsign(from) ?? fromTag }];
+        this.host.store.set('friends', this.friends);
+      }
+      this.lobby.classList.add('hidden');
+      void this.join(code);
+    };
     const no = h('button', 'small', 'LATER');
     no.onclick = () => box.remove();
     box.append(yes, no);
@@ -380,10 +475,17 @@ export class Online {
     chat.placeholder = 'chat…';
     chat.maxLength = 300;
     chat.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter' && chat.value.trim()) { c.chat(chat.value.trim()); chat.value = ''; } };
-    const inv = h('button', 'small', 'INVITE');
-    inv.onclick = () => { this.showLobby(); };
+    const inv = h('button', 'small invitebtn', 'INVITE');
+    inv.onclick = () => { this.openShare(); };
     this.bar.append(chat, inv);
     this.bar.classList.remove('hidden');
+    this.placeBar();
+  }
+
+  /** On phones the header's height depends on how its buttons wrap: sit just below it. */
+  private placeBar() {
+    const hud = document.body.classList.contains('phone') ? document.querySelector('.phonehud') : null;
+    this.bar.style.top = hud ? `${Math.round(hud.getBoundingClientRect().bottom) + 4}px` : '';
   }
 
   // ------------------------------------------------------------------ settings

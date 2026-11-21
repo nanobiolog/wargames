@@ -119,7 +119,8 @@ function resolveLink(): string | null {
 
 async function connect(link: string) {
   try {
-    await client.connect(link, (params.get('role') as Role) ?? undefined);
+    // the link carries the role; the page's original ?role= must not override a later invite link
+    await client.connect(link);
     store.set('link', link);
     (window as any).wallHost?.setLink(link);
     ctx.connected = true;
@@ -284,6 +285,7 @@ const ui = new Ui(document.getElementById('ui')!, {
   currentLink: () => client.link ?? null,
   toggleConsole: () => konsole.toggle(),
   openSettings: () => online.openSettings(),
+  onlineShare: () => online.openShare(),
   openLobby: () => (online.available ? online.showLobby() : ui.showConnect('Paste the session link printed in your terminal.')),
 });
 

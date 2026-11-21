@@ -52,11 +52,15 @@ const PERSIST_MS = 10_000;
 const ABANDON_MS = 24 * 3600_000; // delete a match a day after the last player leaves
 const AI_TIMEOUT_MS = 45_000;
 const MAX_EVENTS = 1500;
+const SEAT_GRACE_MS = 120_000; // a dropped player's seat stays theirs this long
+const SIDES: Side[] = ['USA', 'USSR'];
 
 export class MatchRoom extends DurableObject<Env> {
   private cfg?: MatchConfig;
   private game?: Game;
-  private seats: Partial<Record<Side, { player: string; name: string }>> = {};
+  private seats: Partial<Record<Side, { player: string; name: string; leftAt?: number }>> = {};
+  private readonly bootAt = Date.now();
+  private lastJoin = new Map<string, number>();
   private conns = new Map<WebSocket, Live>();
   private timer?: ReturnType<typeof setInterval>;
   private tickN = 0;
@@ -178,6 +182,14 @@ export class MatchRoom extends DurableObject<Env> {
     const c = this.conns.get(ws);
     this.conns.delete(ws);
     for (const [id, j] of this.jobs) if (j.ws === ws) { clearTimeout(j.timer); this.jobs.delete(id); j.reject(new Error('AI host disconnected')); }
+    if (c?.authed && c.role !== 'SPECTATOR') {
+      const seat = this.seats[c.role];
+      const stillHere = [...this.conns.values()].some((o) => o.authed && o.player === c.player);
+      if (seat?.player === c.player && !stillHere) {
+        seat.leftAt = Date.now();
+        this.ctx.storage.put('seats', this.seats);
+      }
+    }
     if (c?.authed) this.sendRoster();
     this.updateLoop();
   }
@@ -215,7 +227,13 @@ export class MatchRoom extends DurableObject<Env> {
         });
         this.send(ws, { t: 'snap', snap: game.snapshot(c.role) });
         if (c.role !== 'SPECTATOR' && m.role && m.role !== c.role) this.send(ws, { t: 'result', ok: false, msg: `${m.role} SEAT IS TAKEN — JOINED AS ${c.role}` });
-        game.emit({ kind: 'info', text: `${c.name} JOINED${c.role === 'SPECTATOR' ? ' AS SPECTATOR' : ` — ${c.role} COMMAND`}` });
+        // announce people, not screens: extra tabs and reconnects of the same player stay quiet
+        const already = [...this.conns.entries()].some(([w, o]) => w !== ws && o.authed && o.player === c.player);
+        const recent = this.lastJoin.get(c.player) ?? 0;
+        if (!already && Date.now() - recent > 300_000) {
+          game.emit({ kind: 'info', text: `${c.name} JOINED${c.role === 'SPECTATOR' ? ' AS SPECTATOR' : ` — ${c.role} COMMAND`}` });
+        }
+        this.lastJoin.set(c.player, Date.now());
         this.sendRoster();
         this.updateLoop();
         return;
@@ -300,39 +318,58 @@ export class MatchRoom extends DurableObject<Env> {
       { label: 'Spectator wall (TV / big screen)', url: `${makeMatchLink(origin, code, 'SPECTATOR')}&preset=wall`, kind: 'web' as const },
       { label: 'Terminal (any PC)', url: `npx coldlaunch --join ${makeMatchLink(origin, code, side)}`, kind: 'terminal' as const },
     ];
-    if (this.cfg!.opponent === 'human') links.splice(1, 0, { label: `Friend plays ${other}`, url: makeMatchLink(origin, code, other), kind: 'web' as const });
+    if (this.cfg!.opponent === 'human') links.splice(0, 0, { label: `Invite a friend (they get ${other})`, url: makeMatchLink(origin, code), kind: 'web' as const });
     return links;
   }
 
-  /** Decide the seat a client gets. One player (same player id) may hold a side on many screens. */
+  /**
+   * Decide the seat a client gets. Rules:
+   *  - one player (same player id) holds at most one side, on as many screens as they like;
+   *    asking for the other side's link doesn't switch them over;
+   *  - a seat stays reserved for SEAT_GRACE_MS after its owner's last screen drops (phones change
+   *    networks and reconnect), so nobody can grab it in between;
+   *  - a busy seat sends the newcomer to the free human side, otherwise to the spectators.
+   */
   private seat(c: Live, want: Role): Role {
+    const mine = SIDES.find((s) => this.seats[s]?.player === c.player);
     if (want === 'SPECTATOR') {
       // spectators see both sides; in a human-vs-human match a seated player can't also watch as one
-      if (this.cfg!.opponent === 'human') for (const side of ['USA', 'USSR'] as Side[]) if (this.seats[side]?.player === c.player) return side;
-      return 'SPECTATOR';
+      return mine && this.cfg!.opponent === 'human' ? mine : 'SPECTATOR';
     }
-    if (want === this.aiSide()) return 'SPECTATOR';
-    const held = this.seats[want];
-    const holderOnline = held && [...this.conns.values()].some((o) => o.authed && o.player === held.player);
-    if (held && held.player !== c.player && holderOnline) {
-      // seat busy: take the other side if it is free and human, else watch
+    if (mine) return this.claim(mine, c);
+    if (want === this.aiSide()) want = enemyOf(want);
+    if (this.taken(want, c.player)) {
       const other = enemyOf(want);
-      const o = this.seats[other];
-      const otherFree = other !== this.aiSide() && (!o || o.player === c.player || ![...this.conns.values()].some((x) => x.authed && x.player === o.player));
-      if (!otherFree) return 'SPECTATOR';
+      if (other === this.aiSide() || this.taken(other, c.player)) return 'SPECTATOR';
       want = other;
     }
-    this.seats[want] = { player: c.player, name: c.name };
-    this.ctx.storage.put('seats', this.seats);
-    return want;
+    return this.claim(want, c);
+  }
+
+  /** Someone else holds this seat: online now, or dropped less than SEAT_GRACE_MS ago. */
+  private taken(side: Side, player: string): boolean {
+    const s = this.seats[side];
+    if (!s || s.player === player) return false;
+    if ([...this.conns.values()].some((o) => o.authed && o.player === s.player)) return true;
+    return Date.now() - Math.max(s.leftAt ?? 0, this.bootAt) < SEAT_GRACE_MS;
+  }
+
+  private claim(side: Side, c: Live): Side {
+    const prev = this.seats[side];
+    if (!prev || prev.player !== c.player || prev.leftAt || prev.name !== c.name) {
+      this.seats[side] = { player: c.player, name: c.name };
+      this.ctx.storage.put('seats', this.seats);
+    }
+    return side;
   }
 
   private defaultRole(c: Live): Role {
-    for (const side of ['USA', 'USSR'] as Side[]) if (this.seats[side]?.player === c.player) return side;
+    const mine = SIDES.find((s) => this.seats[s]?.player === c.player);
+    if (mine) return mine;
     const host = this.cfg!.hostSide;
-    if (!this.seats[host]) return host;
+    if (!this.taken(host, c.player)) return host;
     const other = enemyOf(host);
-    return other === this.aiSide() ? 'SPECTATOR' : other;
+    return other === this.aiSide() || this.taken(other, c.player) ? 'SPECTATOR' : other;
   }
 
   private isHost(c: Live) {

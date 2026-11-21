@@ -75,6 +75,36 @@ pc.close(); phone.close();
 
 const inv = await fetch(`${origin}/api/invite/K7M2Q`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: created.code, from: 'raven-42', fromTag: 'ABCDE' }) }).then((r) => r.json() as Promise<{ ok: boolean }>);
 ok(inv.ok, 'friend invite accepted');
+// flicker regression: a screen already in the match (spectator link) accepts an invite on the same page
+const flick = new GameClient('gui');
+flick.identity = { name: 'tv-phone', player: 'player-flicker' };
+const views: string[] = [];
+flick.on('snap', (sn) => { if (views[views.length - 1] !== sn.viewer) views.push(sn.viewer); });
+await flick.connect(`${created.url}?role=SPECTATOR`);
+await new Promise((r) => setTimeout(r, 800));
+await flick.connect(created.url);
+await new Promise((r) => setTimeout(r, 2500));
+ok(views.length <= 2, `re-joining on the same page doesn't flicker (views: ${views.join(' → ')})`);
+flick.close();
+
+// sticky seats: the host drops (phone changes network); nobody can take USA in the grace period,
+// and the USSR player can't hop over to USA with a USA link
+usa.close(); usa2.close();
+await new Promise((r) => setTimeout(r, 500));
+const hopper = new GameClient('gui');
+hopper.identity = { name: 'viper-07', player: 'player-ussr-1' };
+await hopper.connect(`${created.url}?role=USA`);
+ok(hopper.role === 'USSR', `seated USSR player asking for USA stays ${hopper.role}`);
+const late = new GameClient('gui');
+late.identity = { name: 'late', player: 'player-late' };
+await late.connect(`${created.url}?role=USA`);
+ok(late.role === 'SPECTATOR', `newcomer can't take the dropped host's seat during the grace period (${late.role})`);
+const back = new GameClient('gui');
+back.identity = { name: 'raven-42', player: 'player-usa-1' };
+await back.connect(created.url);
+ok(back.role === 'USA', `host comes back to ${back.role}`);
+for (const c of [hopper, late, back]) c.close();
+
 for (const c of [usa, usa2, ussr, thief, spec]) c.close();
 console.log('\nALL CHECKS PASSED');
 process.exit(0);

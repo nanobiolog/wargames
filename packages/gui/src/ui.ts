@@ -20,6 +20,8 @@ interface UiHost {
   toggleConsole(): void;
   openSettings(): void;
   openLobby?(): void;
+  /** online share sheet; returns false when not in an online match */
+  onlineShare?(): boolean;
 }
 
 declare global {
@@ -172,6 +174,7 @@ export class Ui {
 
   /** Share panel: switch on LAN sharing and show QR codes for phones / other PCs. */
   async openShare(enable = false) {
+    if (this.host.onlineShare?.()) { this.toggle(''); return; }
     const p = this.panels.share;
     this.toggle('share');
     if (p.classList.contains('hidden')) return;
