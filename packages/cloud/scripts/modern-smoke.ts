@@ -16,6 +16,8 @@ const join = async (name: string, player: string, role?: string) => {
   return c;
 };
 const host = await join('raven-42', 'p-host');
+host.startMatch(); // matches open in a lobby; the host starts the clock
+await new Promise((r) => setTimeout(r, 300));
 ok(host.role === 'USA' && host.world?.factions?.length === 5, `host commands ${host.role}; world has ${host.world?.factions?.map((f) => f.id).join(' ')}`);
 const friend = await join('viper-07', 'p-friend');
 ok(friend.role === 'CHN', `friend gets the scenario's main adversary: ${friend.role}`);

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { GameEvent, Role, Side, Snapshot, StaticWorld } from './types.ts';
+import type { Branch, GameEvent, Role, Side, Snapshot, StaticWorld } from './types.ts';
 
 export const DEFAULT_PORT = 7700;
 
@@ -75,6 +75,22 @@ export const ClientMsgSchema = z.discriminatedUnion('t', [
     error: z.string().max(400).optional(),
   }),
   z.object({ t: z.literal('chat'), text: z.string().min(1).max(300) }),
+  // ---- online match room (pre-game lobby, crews, host controls)
+  /** take a seat: a nation and a branch (several players can share a nation), or watch */
+  z.object({ t: z.literal('seat'), role: z.string().regex(/^[A-Z]{2,12}$/), branch: z.enum(['commander', 'navy', 'air', 'rocket']).optional() }),
+  /** host, before the start: change the match settings */
+  z.object({
+    t: z.literal('config'),
+    scenario: z.string().max(20).optional(),
+    speed: z.number().min(1).max(60).optional(),
+    personality: z.number().min(0).max(1).optional(),
+    opponent: z.enum(['human', 'rules', 'byok']).optional(),
+    endMode: z.enum(['open', 'classic']).optional(),
+  }),
+  /** host: start the clock */
+  z.object({ t: z.literal('start') }),
+  /** host: end the match for everyone */
+  z.object({ t: z.literal('endmatch') }),
 ]);
 export type ClientMsg = z.infer<typeof ClientMsgSchema>;
 
@@ -108,6 +124,24 @@ export interface MatchInfo {
   host?: string; // callsign of the creator
 }
 
+/** The match room as each client sees it (online matches). */
+export interface LobbyState {
+  phase: 'lobby' | 'running' | 'over';
+  host: string;
+  youAreHost: boolean;
+  options: { scenario: string; scenarioName: string; speed: number; personality: number; opponent: 'human' | 'rules' | 'byok'; endMode: 'open' | 'classic' };
+  nations: {
+    id: Side; name: string; color: string; brief: string; playable: boolean;
+    /** the AI plays it right now (no human crew, or reserved for the AI) */
+    ai: boolean;
+    reservedForAi: boolean;
+    out: boolean;
+    crew: { name: string; branch: Branch; online: boolean; you: boolean }[];
+  }[];
+  spectators: { name: string; you: boolean }[];
+  you: { role: Role; branch?: Branch };
+}
+
 /** Work for a browser that holds the player's own AI key (online matches). */
 export interface AiJob {
   id: string;
@@ -123,6 +157,7 @@ export interface AiJob {
 export type ServerMsg =
   | { t: 'welcome'; role: Role; world: StaticWorld; link: string; aiOpponent?: string; match?: MatchInfo; you?: string }
   | { t: 'roster'; players: RosterEntry[] }
+  | { t: 'lobby'; state: LobbyState }
   | { t: 'aiJob'; job: AiJob }
   | { t: 'chat'; from: string; role: Role; text: string }
   | { t: 'snap'; snap: Snapshot }

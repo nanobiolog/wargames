@@ -19,6 +19,8 @@ const join = async (name: string, player: string, role?: 'USA' | 'USSR' | 'SPECT
   return c;
 };
 const usa = await join('raven-42', 'player-usa-1');
+usa.startMatch(); // matches open in a lobby; the host starts the clock
+await new Promise((r) => setTimeout(r, 300));
 const usa2 = await join('raven-42', 'player-usa-1', 'USA'); // same player, second screen
 const ussr = await join('viper-07', 'player-ussr-1');
 const thief = await join('ghost-99', 'player-x', 'USA'); // seat taken → bounced

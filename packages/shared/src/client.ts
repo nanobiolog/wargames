@@ -1,7 +1,7 @@
 // WebSocket game client shared by the terminal, the Electron GUI and the MCP server.
 // Uses the global WebSocket (browsers, Electron, Node >= 22).
 import {
-  parseLink, wsUrl, type AiJob, type MatchInfo, type RosterEntry, type ClientMsg, type Command, type Focus, type PlanProposal, type ServerMsg, type ShareInfo,
+  parseLink, wsUrl, type AiJob, type LobbyState, type MatchInfo, type RosterEntry, type ClientMsg, type Command, type Focus, type PlanProposal, type ServerMsg, type ShareInfo,
 } from './protocol.ts';
 import type { GameEvent, Role, Snapshot, StaticWorld } from './types.ts';
 
@@ -20,6 +20,8 @@ export class GameClient {
   aiOpponent?: string;
   match?: MatchInfo;
   roster: RosterEntry[] = [];
+  /** online match room state (pre-game lobby, crews) */
+  lobby?: LobbyState;
   events: GameEvent[] = [];
   /** identity sent in hello (online matches) */
   identity: { name?: string; player?: string; tag?: string; caps?: 'ai'[] } = {};
@@ -37,6 +39,7 @@ export class GameClient {
     status: new Set<Listener<string>>(),
     welcome: new Set<Listener<StaticWorld>>(),
     roster: new Set<Listener<RosterEntry[]>>(),
+    lobby: new Set<Listener<LobbyState>>(),
     aiJob: new Set<Listener<AiJob>>(),
     chat: new Set<Listener<{ from: string; role: Role; text: string }>>(),
   };
@@ -179,6 +182,10 @@ export class GameClient {
         this.roster = m.players;
         this.fire('roster', m.players);
         break;
+      case 'lobby':
+        this.lobby = m.state;
+        this.fire('lobby', m.state);
+        break;
       case 'aiJob':
         this.fire('aiJob', m.job);
         break;
@@ -196,6 +203,20 @@ export class GameClient {
   chat(text: string) {
     this.raw({ t: 'chat', text });
   }
+
+  /** Online match room: take a seat (nation + branch) or watch. */
+  takeSeat(role: Role, branch?: 'commander' | 'navy' | 'air' | 'rocket') {
+    this.raw({ t: 'seat', role, branch });
+  }
+
+  /** Host, before the start: change settings. */
+  configure(opts: Omit<Extract<ClientMsg, { t: 'config' }>, 't'>) {
+    this.raw({ t: 'config', ...opts });
+  }
+
+  /** Host: start the clock / end the match. */
+  startMatch() { this.raw({ t: 'start' }); }
+  endMatch() { this.raw({ t: 'endmatch' }); }
 
   /** Heartbeat (online matches keep their server awake only while the clock runs). */
   ping() {

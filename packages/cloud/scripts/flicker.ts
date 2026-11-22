@@ -9,6 +9,8 @@ const m = await create();
 const host = new GameClient('gui');
 host.identity = { name: 'host', player: 'player-host-1' };
 await host.connect(m.url);
+host.startMatch(); // matches open in a lobby; the host starts the clock
+await new Promise((r) => setTimeout(r, 300));
 
 const phone = new GameClient('gui');
 phone.identity = { name: 'phone', player: 'player-phone-1' };

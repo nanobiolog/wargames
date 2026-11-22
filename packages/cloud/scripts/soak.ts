@@ -14,6 +14,8 @@ c.on('status', (s) => { if (s === 'disconnected') drops++; });
 c.on('snap', (s) => { if (s.t < lastT) backwards++; lastT = s.t; });
 await c.connect(m.url);
 while (!c.snap) await new Promise((r) => setTimeout(r, 50));
+c.startMatch(); // matches open in a lobby; the host starts the clock
+await new Promise((r) => setTimeout(r, 300));
 const hb = setInterval(() => c.ping(), 20_000);
 const t0 = Date.now(), g0 = c.snap!.t;
 for (let i = 1; i <= secs / 10; i++) {

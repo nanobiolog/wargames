@@ -32,6 +32,8 @@ export default {
         speed: typeof body.speed === 'number' ? body.speed : undefined,
         personality: typeof body.personality === 'number' ? body.personality : undefined,
         host: cleanCallsign(typeof body.name === 'string' ? body.name : undefined) ?? undefined,
+        hostPlayer: typeof body.player === 'string' && /^[\w-]{6,40}$/.test(body.player) ? body.player : undefined,
+        endMode: body.endMode === 'classic' ? 'classic' : 'open',
       };
       for (let attempt = 0; attempt < 5; attempt++) {
         const code = shortCode();
