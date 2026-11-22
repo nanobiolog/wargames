@@ -50,6 +50,8 @@ export interface SceneState {
   tNow: number;
   selected: string | null;
   hover: string | null;
+  /** while choosing a target: what a click would hit right now (drawn as a red target marker) */
+  targetHover?: { lat: number; lon: number; name: string } | null;
   plan: PlanProposal | null;
   layers: Record<LayerKey, boolean>;
   dpr: number;
@@ -346,6 +348,13 @@ export interface Pick {
   x: number;
   y: number;
   name: string;
+  /** what was hit: own unit, enemy contact, missile track or a city (label or dot) */
+  kind?: 'own' | 'contact' | 'missile' | 'city';
+  /** unit kind (silo, carrier, ...) for units and contacts */
+  ukind?: string;
+  side?: string;
+  lat?: number;
+  lon?: number;
 }
 
 class Occupancy {
@@ -395,7 +404,7 @@ export function buildPanelLabels(b: DynBatch, st: SceneState, xf: Xform, focusLa
     const p = toScreen(xf, u.lat, u.lon);
     if (!p || p[0] < -20 || p[1] < -20 || p[0] > xf.w + 20 || p[1] > xf.h + 20) continue;
     occ.tryTake(p[0] - 5 * dpr, p[1] - 5 * dpr, 10 * dpr, 10 * dpr);
-    picks.push({ id: u.id, x: p[0], y: p[1], name: u.name });
+    picks.push({ id: u.id, x: p[0], y: p[1], name: u.name, kind: own ? 'own' : 'contact', ukind: u.kind, side: u.side, lat: u.lat, lon: u.lon });
   }
   // missile heads are clickable too (lifted by altitude like the drawing)
   if (snap && L.missiles) {
@@ -405,7 +414,7 @@ export function buildPanelLabels(b: DynBatch, st: SceneState, xf: Xform, focusLa
       const p = toScreen(xf, pos.p.lat, pos.p.lon);
       if (!p) continue;
       const y = p[1] - pos.alt * lift;
-      picks.push({ id: m.id, x: p[0], y, name: `${m.type} ${m.side} → ${m.target}` });
+      picks.push({ id: m.id, x: p[0], y, name: `${m.type} ${m.side} → ${m.target}`, kind: 'missile' });
       if (m.id === st.selected) {
         const r = 16 * dpr;
         for (let i = 0; i < 40; i++) {
@@ -438,7 +447,16 @@ export function buildPanelLabels(b: DynBatch, st: SceneState, xf: Xform, focusLa
     const minPop = span > 200 ? 4000 : span > 90 ? 1500 : span > 40 ? 500 : 0;
     for (const c of [...st.world.cities].sort((a, b2) => b2.pop - a.pop)) {
       if (c.pop < minPop) continue;
-      place(c.lat, c.lon, c.name, span < 30 ? big : small, dimC(COL.city, 0.9));
+      const size = span < 30 ? big : small;
+      if (place(c.lat, c.lon, c.name, size, dimC(COL.city, 0.9))) {
+        // cities are targets: the dot and the middle of the name both pick it
+        const sp = toScreen(xf, c.lat, c.lon);
+        if (sp) {
+          const pick = { id: `city:${c.id}`, name: `${c.name} (CITY)`, kind: 'city' as const, side: c.side, lat: c.lat, lon: c.lon };
+          picks.push({ ...pick, x: sp[0], y: sp[1] });
+          picks.push({ ...pick, x: sp[0] + 7 * dpr + textWidth(c.name, size) / 2, y: sp[1] });
+        }
+      }
     }
   }
   if (snap) {
@@ -466,6 +484,19 @@ export function buildPanelLabels(b: DynBatch, st: SceneState, xf: Xform, focusLa
   }
   if (st.world && span < 160) {
     for (const a of st.world.seaAreas) place(a.lat, a.lon, a.name, small, dimC(COL.coast, 0.4), 0);
+  }
+  // target marker: a red crosshair on whatever the order will hit
+  const th = st.targetHover;
+  if (th) {
+    const r = 14 * dpr, k = 6 * dpr;
+    const red = COL.red;
+    for (let i = 0; i < 36; i++) {
+      const a0 = (i / 36) * Math.PI * 2, a1 = ((i + 1) / 36) * Math.PI * 2;
+      b.seg(th.lon, th.lat, th.lon, th.lat, red, 1.8 * dpr, 0, Math.cos(a0) * r, Math.sin(a0) * r, Math.cos(a1) * r, Math.sin(a1) * r);
+    }
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) b.seg(th.lon, th.lat, th.lon, th.lat, red, 1.8 * dpr, 0, dx * (r - k), dy * (r - k), dx * (r + k), dy * (r + k));
+    const segs = textSegments(th.name, 8 * dpr, 0);
+    for (let i = 0; i < segs.length; i += 4) b.seg(th.lon, th.lat, th.lon, th.lat, red, lw, 0, segs[i] + r + 6 * dpr, segs[i + 1] - r, segs[i + 2] + r + 6 * dpr, segs[i + 3] - r);
   }
   return picks;
 }

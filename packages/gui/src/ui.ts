@@ -1,9 +1,12 @@
 // DOM overlays: toolbar, layer/CRT panels, info card, context menu, targeting, toasts, connect dialog.
 import {
-  KIND_LABEL, fmtLatLon, describeCommand, selectionDetails, type Command, type Contact, type GameClient, type GameEvent, type LatLon, type Unit,
+  KIND_LABEL, fmtLatLon, describeCommand, selectionDetails, distKm, stanceOf, type Command, type Contact, type GameClient, type GameEvent, type LatLon, type Unit,
 } from '@coldlaunch/shared';
 import type { FxSettings } from './gl.ts';
-import { LAYER_LIST, type LayerKey, type SceneState } from './scene.ts';
+import { LAYER_LIST, type LayerKey, type Pick, type SceneState } from './scene.ts';
+
+/** What a targeting click may hit: nuclear (ships, bases, cities), military (ships and bases), place (anywhere). */
+export type TargetMode = 'nuclear' | 'military' | 'place';
 import { PRESET_NAMES } from './wall.ts';
 import QRCode from 'qrcode';
 
@@ -43,7 +46,7 @@ const h = (tag: string, cls = '', html = '') => {
 };
 
 export class Ui {
-  targeting: null | { label: string; build: (target: string) => Command } = null;
+  targeting: null | { label: string; accept: TargetMode; build: (target: string) => Command } = null;
   private toolbar: HTMLElement;
   private panels: Record<string, HTMLElement> = {};
   private info: HTMLElement;
@@ -275,68 +278,174 @@ export class Ui {
     this.info.classList.remove('hidden');
   }
 
-  contextMenu(x: number, y: number, unitId: string | null, ll: LatLon) {
+  /**
+   * Right-click menu. On your own unit: everything that unit can do (launch, cruise missiles, jets,
+   * drones, scramble, strike, move...). On an enemy ship, base or a city: the weapons of yours that
+   * can reach it. Orders that need a target start targeting mode, where the click snaps to the ship,
+   * base or city under the cursor.
+   */
+  contextMenu(x: number, y: number, pick: Pick | null, ll: LatLon) {
     const c = this.host.client;
-    const items: [string, () => void][] = [];
-    const u = this.findUnit(unitId);
-    const own = u && (this.host.st.role === 'SPECTATOR' || u.side === this.host.st.role) && !('seenT' in u);
-    const target = (label: string, build: (t: string) => Command) => () => this.startTarget(label, build);
+    const role = this.host.st.role;
+    const snap = c.snap;
+    const items: { label: string; fn?: () => void; cls?: string }[] = [];
+    const add = (label: string, fn: () => void, cls = '') => items.push({ label, fn, cls });
+    const head = (label: string) => items.push({ label, cls: 'mhead' });
+    const u = this.findUnit(pick?.id ?? null);
+    const own = !!u && role !== 'SPECTATOR' && u.side === role && !('seenT' in u);
+    const T = (label: string, accept: TargetMode, build: (t: string) => Command) => () => this.startTarget(label, accept, build);
+    const mine = (snap?.units ?? []).filter((x) => x.side === role && x.status !== 'destroyed');
     if (u && own) {
       const x2 = u as Unit;
+      head(`${u.name} · ${KIND_LABEL[u.kind]}`);
       if ((u.kind === 'silo' || u.kind === 'ssbn') && (x2.missiles ?? 0) > 0) {
-        items.push([`LAUNCH 1 FROM ${u.id.toUpperCase()} →`, target('SELECT TARGET — LAUNCH 1', (t) => ({ op: 'launch', from: u.id, target: t, count: 1 }))]);
-        items.push([`LAUNCH 4 →`, target('SELECT TARGET — LAUNCH 4', (t) => ({ op: 'launch', from: u.id, target: t, count: 4 }))]);
-        items.push([`LAUNCH ALL (${x2.missiles}) →`, target('SELECT TARGET — LAUNCH ALL', (t) => ({ op: 'launch', from: u.id, target: t, count: x2.missiles }))]);
+        add('☢ LAUNCH 1 MISSILE →', T('NUCLEAR TARGET — LAUNCH 1', 'nuclear', (t) => ({ op: 'launch', from: u.id, target: t, count: 1 })), 'danger');
+        add('☢ LAUNCH 4 →', T('NUCLEAR TARGET — LAUNCH 4', 'nuclear', (t) => ({ op: 'launch', from: u.id, target: t, count: 4 })), 'danger');
+        add(`☢ LAUNCH ALL (${x2.missiles}) →`, T('NUCLEAR TARGET — LAUNCH ALL', 'nuclear', (t) => ({ op: 'launch', from: u.id, target: t, count: x2.missiles })), 'danger');
+      }
+      if ((x2.cruise ?? 0) > 0) {
+        add(`CRUISE MISSILES ×4 → (${x2.cruise} aboard)`, T('CRUISE MISSILE TARGET — SHIP OR BASE', 'military', (t) => ({ op: 'cruise', from: u.id, target: t, count: 4 })));
+        if ((x2.cruise ?? 0) > 4) add(`CRUISE MISSILES ×${Math.min(8, x2.cruise ?? 0)} →`, T('CRUISE MISSILE TARGET — SHIP OR BASE', 'military', (t) => ({ op: 'cruise', from: u.id, target: t, count: Math.min(8, x2.cruise ?? 0) })));
+        if ((x2.cruise ?? 0) > 8) add(`CRUISE MISSILES — ALL ${x2.cruise} →`, T('CRUISE MISSILE TARGET — SHIP OR BASE', 'military', (t) => ({ op: 'cruise', from: u.id, target: t, count: x2.cruise })));
+      }
+      if ((u.kind === 'carrier' || u.kind === 'afb_int') && (x2.interceptors ?? 0) > 0) {
+        head(`JETS (${x2.interceptors} ${u.kind === 'carrier' ? 'aboard' : 'on base'})`);
+        add('RECON FLIGHT →', T('RECON — WHERE TO SEARCH', 'place', (t) => ({ op: 'sortie', from: u.id, mission: 'recon', to: t })));
+        add(`COMBAT AIR PATROL OVER ${u.kind === 'carrier' ? 'THE GROUP' : 'THE BASE'}`, () => this.send({ op: 'sortie', from: u.id, mission: 'cap' }));
+        add('COMBAT AIR PATROL AT →', T('CAP — WHERE TO PATROL', 'place', (t) => ({ op: 'sortie', from: u.id, mission: 'cap', to: t })));
+        add(`JET STRIKE ×${Math.min(8, x2.interceptors ?? 0)} →`, T('JET STRIKE TARGET — SHIP OR BASE', 'military', (t) => ({ op: 'sortie', from: u.id, mission: 'strike', to: t, count: Math.min(8, x2.interceptors ?? 0) })));
+        if ((x2.interceptors ?? 0) > 8) add(`JET STRIKE — ALL ${x2.interceptors} →`, T('JET STRIKE TARGET — SHIP OR BASE', 'military', (t) => ({ op: 'sortie', from: u.id, mission: 'strike', to: t, count: x2.interceptors })));
+      }
+      if ((x2.drones ?? 0) > 0) {
+        head(`DRONES (${x2.drones})`);
+        add('ISR DRONE →', T('DRONE — WHERE TO WATCH', 'place', (t) => ({ op: 'sortie', from: u.id, mission: 'drone', to: t })));
+        add(`ATTACK SWARM ×${Math.min(12, x2.drones ?? 0)} →`, T('DRONE SWARM TARGET — SHIP OR BASE', 'military', (t) => ({ op: 'sortie', from: u.id, mission: 'swarm', to: t, count: Math.min(12, x2.drones ?? 0) })));
       }
       if (u.kind === 'airbase' && (x2.aircraft ?? 0) > 0) {
-        items.push(['SCRAMBLE ALL', () => this.send({ op: 'scramble', base: u.id })]);
-        items.push(['SCRAMBLE HALF', () => this.send({ op: 'scramble', base: u.id, count: Math.ceil((x2.aircraft ?? 2) / 2) })]);
-        items.push(['SCRAMBLE TO ORBIT →', target('SELECT ORBIT POINT', (t) => ({ op: 'scramble', base: u.id, to: t }))]);
+        head(`BOMBERS (${x2.aircraft} × ${u.cls})`);
+        add('SCRAMBLE ALL', () => this.send({ op: 'scramble', base: u.id }));
+        add('SCRAMBLE HALF', () => this.send({ op: 'scramble', base: u.id, count: Math.ceil((x2.aircraft ?? 2) / 2) }));
+        add('SCRAMBLE TO ORBIT →', T('BOMBER ORBIT POINT', 'place', (t) => ({ op: 'scramble', base: u.id, to: t })));
       }
       if (u.kind === 'bomber') {
-        items.push(['GO-CODE: STRIKE →', target('SELECT TARGET — BOMBER STRIKE', (t) => ({ op: 'strike', unit: u.id, target: t }))]);
-        items.push(['NEW ORBIT →', target('SELECT ORBIT POINT', (t) => ({ op: 'move', unit: u.id, to: t }))]);
-        items.push(['RECALL', () => this.send({ op: 'recall', unit: u.id })]);
+        add('☢ GO-CODE: STRIKE →', T('NUCLEAR TARGET — BOMBER STRIKE', 'nuclear', (t) => ({ op: 'strike', unit: u.id, target: t })), 'danger');
+        add('NEW ORBIT →', T('NEW ORBIT POINT', 'place', (t) => ({ op: 'move', unit: u.id, to: t })));
+        add('RECALL', () => this.send({ op: 'recall', unit: u.id }));
       }
-      if (u.kind === 'carrier' || u.kind === 'ssbn' || u.kind === 'ssn') items.push(['MOVE TO →', target('SELECT DESTINATION', (t) => ({ op: 'move', unit: u.id, to: t }))]);
+      if (u.kind === 'flight') add('RECALL TO BASE', () => this.send({ op: 'recall', unit: u.id }));
+      if (u.kind === 'carrier' || u.kind === 'ssbn' || u.kind === 'ssn') add('MOVE TO →', T('DESTINATION', 'place', (t) => ({ op: 'move', unit: u.id, to: t })));
+    } else if (pick && role !== 'SPECTATOR' && (pick.kind === 'contact' || pick.kind === 'city') && pick.side !== role) {
+      // attack this ship / base / city with whatever can reach it
+      const tgt = { lat: pick.lat ?? ll.lat, lon: pick.lon ?? ll.lon };
+      const isCity = pick.kind === 'city';
+      const targetRef = isCity ? pick.name.replace(/ \(CITY\)$/, '') : pick.id;
+      const near = (list: Unit[], max: number, n: number) => list.map((v) => ({ v, d: distKm(v, tgt) })).filter((x) => x.d <= max).sort((a, b) => a.d - b.d).slice(0, n);
+      head(`ATTACK ${pick.name}`);
+      if (!isCity && pick.ukind !== 'satellite') {
+        for (const { v, d } of near(mine.filter((v) => (v.cruise ?? 0) > 0), 99999, 3).filter(({ v, d }) => d <= (v.cruiseRangeKm ?? 1500))) {
+          add(`CRUISE ×${Math.min(4, v.cruise ?? 0)} FROM ${v.id.toUpperCase()} (${Math.round(d)} KM)`, () => this.send({ op: 'cruise', from: v.id, target: targetRef, count: Math.min(4, v.cruise ?? 0) }));
+        }
+        for (const { v, d } of near(mine.filter((v) => (v.kind === 'carrier' || v.kind === 'afb_int') && (v.interceptors ?? 0) >= 2), 1500, 3)) {
+          add(`JET STRIKE FROM ${v.id.toUpperCase()} (${Math.round(d)} KM)`, () => this.send({ op: 'sortie', from: v.id, mission: 'strike', to: targetRef, count: Math.min(8, v.interceptors ?? 0) }));
+        }
+        for (const { v, d } of near(mine.filter((v) => (v.drones ?? 0) > 0), 2500, 2)) {
+          add(`DRONE SWARM FROM ${v.id.toUpperCase()} (${Math.round(d)} KM)`, () => this.send({ op: 'sortie', from: v.id, mission: 'swarm', to: targetRef, count: Math.min(12, v.drones ?? 0) }));
+        }
+        const rec = near(mine.filter((v) => (v.kind === 'carrier' || v.kind === 'afb_int') && (v.interceptors ?? 0) >= 2), 1500, 1)[0];
+        if (rec) add(`RECON FLIGHT FROM ${rec.v.id.toUpperCase()}`, () => this.send({ op: 'sortie', from: rec.v.id, mission: 'recon', to: `${tgt.lat.toFixed(2)},${tgt.lon.toFixed(2)}` }));
+        const isr = near(mine.filter((v) => (v.drones ?? 0) > 0), 3000, 1)[0];
+        if (isr) add(`ISR DRONE FROM ${isr.v.id.toUpperCase()}`, () => this.send({ op: 'sortie', from: isr.v.id, mission: 'drone', to: `${tgt.lat.toFixed(2)},${tgt.lon.toFixed(2)}` }));
+      }
+      for (const v of mine.filter((v) => v.kind === 'bomber' && (v.bombs ?? 0) > 0 && v.status !== 'enroute').slice(0, 3)) {
+        add(`☢ BOMBER STRIKE: ${v.id.toUpperCase()}`, () => this.confirmSend({ op: 'strike', unit: v.id, target: targetRef }), 'danger');
+      }
+      for (const { v, d } of near(mine.filter((v) => (v.kind === 'silo' || v.kind === 'ssbn') && (v.missiles ?? 0) > 0), 99999, 6).filter(({ v, d }) => d <= (v.rangeKm ?? 12000)).slice(0, 3)) {
+        add(`☢ LAUNCH 1 FROM ${v.id.toUpperCase()} (${Math.round(d)} KM)`, () => this.confirmSend({ op: 'launch', from: v.id, target: targetRef, count: 1 }), 'danger');
+      }
+      if (items.length === 1) items.push({ label: 'NOTHING OF YOURS CAN REACH IT', cls: 'mnote' });
     }
-    if (u) items.push(['SHOW IN TERMINAL', () => c.focus({ lat: u.lat, lon: u.lon, unit: u.id, label: u.name })]);
-    items.push([`FOCUS TERMINAL HERE (${fmtLatLon(ll)})`, () => c.focus({ lat: ll.lat, lon: ll.lon, zoom: 8, label: fmtLatLon(ll) })]);
-    if (this.host.st.role !== 'SPECTATOR') {
-      for (const lvl of [5, 4, 3, 2, 1]) items.push([`DEFCON ${lvl}`, () => this.send({ op: 'defcon', level: lvl })]);
+    head('MAP');
+    if (u) add('SHOW IN TERMINAL', () => c.focus({ lat: u.lat, lon: u.lon, unit: u.id, label: u.name }));
+    add(`FOCUS TERMINAL HERE (${fmtLatLon(ll)})`, () => c.focus({ lat: ll.lat, lon: ll.lon, zoom: 8, label: fmtLatLon(ll) }));
+    if (role !== 'SPECTATOR') {
+      head('READINESS');
+      const cur = snap?.defcon[role] ?? 5;
+      for (const lvl of [5, 4, 3, 2, 1]) add(`DEFCON ${lvl}${lvl === cur ? ' (NOW)' : ''}`, () => this.send({ op: 'defcon', level: lvl }));
     }
-    items.push([c.snap?.paused ? 'RESUME' : 'PAUSE', () => this.send({ op: 'pause' })]);
+    add(snap?.paused ? 'RESUME' : 'PAUSE', () => this.send({ op: 'pause' }));
     this.menu.innerHTML = '';
-    for (const [label, fn] of items) {
-      const b = h('button', label.startsWith('LAUNCH') ? 'danger' : '', label);
-      b.onclick = (e) => { e.stopPropagation(); this.menu.classList.add('hidden'); fn(); };
+    for (const it of items) {
+      if (!it.fn) { this.menu.append(h('div', it.cls ?? 'mhead', it.label.replace(/</g, '&lt;'))); continue; }
+      const b = h('button', it.cls ?? '', it.label.replace(/</g, '&lt;'));
+      b.onclick = (e) => { e.stopPropagation(); this.menu.classList.add('hidden'); it.fn!(); };
       this.menu.append(b);
     }
-    this.menu.style.left = `${Math.min(x, window.innerWidth - 260)}px`;
-    this.menu.style.top = `${Math.min(y, window.innerHeight - items.length * 26 - 10)}px`;
     this.menu.classList.remove('hidden');
+    const r = this.menu.getBoundingClientRect();
+    this.menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - r.width - 6))}px`;
+    this.menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - r.height - 6))}px`;
   }
 
-  private startTarget(label: string, build: (t: string) => Command) {
-    this.targeting = { label, build };
-    this.banner.textContent = `${label} — CLICK THE MAP · ESC TO CANCEL`;
+  private startTarget(label: string, accept: TargetMode, build: (t: string) => Command) {
+    this.targeting = { label, accept, build };
+    const hint = accept === 'nuclear' ? 'CLICK AN ENEMY SHIP, BASE OR CITY' : accept === 'military' ? 'CLICK AN ENEMY SHIP OR BASE' : 'CLICK THE MAP (SNAPS TO NEARBY SHIPS, BASES, CITIES)';
+    this.banner.textContent = `${label} — ${hint} · ESC TO CANCEL`;
     this.banner.classList.remove('hidden');
   }
 
-  completeTarget(unitId: string | null, ll: LatLon | null) {
+  /** What a click would target in the current targeting mode (snaps to the nearest fitting pick). */
+  targetFor(picks: Pick[] | undefined, sx: number, sy: number, radius: number): Pick | null {
     const tg = this.targeting;
-    if (!tg) return;
+    if (!tg || !picks) return null;
+    const role = this.host.st.role;
+    const ok = (k: Pick) => {
+      if (k.kind === 'missile') return false;
+      if (tg.accept === 'place') return true;
+      if (k.kind === 'own') return false;
+      if (k.side === role) return false;
+      // your own and your allies' forces and cities are never offered as targets
+      if (k.side && stanceOf(this.host.st.world, role, k.side) === 'allied') return false;
+      if (k.kind === 'city') return tg.accept === 'nuclear' && k.side !== 'OTHER';
+      return k.ukind !== 'satellite';
+    };
+    let best: Pick | null = null, bd = radius * radius;
+    for (const k of picks) {
+      if (!ok(k)) continue;
+      const d = (k.x - sx) ** 2 + (k.y - sy) ** 2;
+      if (d < bd) { bd = d; best = k; }
+    }
+    return best;
+  }
+
+  /** Finish targeting with what the click snapped to. Returns false (and stays in targeting) if nothing valid was hit. */
+  completeTarget(pick: Pick | null, ll: LatLon | null): boolean {
+    const tg = this.targeting;
+    if (!tg) return true;
+    let t: string | null = null;
+    if (pick) t = pick.kind === 'city' ? pick.name.replace(/ \(CITY\)$/, '') : pick.id;
+    else if (tg.accept === 'place' && ll) t = `${ll.lat.toFixed(2)},${ll.lon.toFixed(2)}`;
+    if (!t) {
+      this.toast(tg.accept === 'nuclear' ? 'NO TARGET THERE — CLICK AN ENEMY SHIP, BASE OR CITY' : 'NO TARGET THERE — CLICK AN ENEMY SHIP OR BASE', 'bad');
+      return false;
+    }
     this.targeting = null;
+    this.host.st.targetHover = null;
     this.banner.classList.add('hidden');
-    const t = unitId ?? (ll ? `${ll.lat.toFixed(2)},${ll.lon.toFixed(2)}` : null);
-    if (!t) return;
     const cmd = tg.build(t);
-    if (cmd.op === 'launch' && !confirm(`${describeCommand(cmd)}\n\nMissiles cannot be recalled. Confirm launch order?`)) return;
+    if (cmd.op === 'launch' || cmd.op === 'strike') this.confirmSend(cmd);
+    else this.send(cmd);
+    return true;
+  }
+
+  /** Nuclear orders always ask first. */
+  private confirmSend(cmd: Command) {
+    if (!confirm(`${describeCommand(cmd)}\n\nThis is a nuclear order and cannot be recalled once missiles fly. Confirm?`)) return;
     this.send(cmd);
   }
 
   cancel() {
     this.targeting = null;
+    this.host.st.targetHover = null;
     this.banner.classList.add('hidden');
     this.menu.classList.add('hidden');
     this.toggle('');

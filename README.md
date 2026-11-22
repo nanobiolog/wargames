@@ -170,6 +170,11 @@ ships under the swath are imaged. You can see everyone's satellites. Cruise miss
 and only radars, fighters and ships close to their track pick them up. Point defence can engage only a few per minute,
 so a big salvo gets some through.
 
+**On the wall display, right-click does it all.**
+- **Your units:** right-click a carrier for cruise missiles, recon, CAP, a jet strike or a move; an air base to scramble bombers or launch drones; a bomber group for a strike, a new orbit or recall.
+- **Enemy ships, bases and city names:** right-click them to see every weapon of yours that can reach them.
+- **Targeting:** when an order needs a target, the click snaps to the ship, base or city under or near the cursor, marked in red. Nuclear orders always ask for confirmation.
+
 Jets come from the group's own fighters, so a carrier with its air wing away defends itself less. Recon flights
 identify ships and aircraft and may catch a submarine near the surface. Surface groups that hold a contact on a hostile
 group within 300 km trade anti-ship missiles at DEFCON 2. Coastal radars track ships, and every faction receives an

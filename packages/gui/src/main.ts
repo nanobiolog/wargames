@@ -1,4 +1,4 @@
-import { GameClient, makeLink, makeMatchLink, normalizeCode, parseLink, type Focus, type GameEvent, type LatLon, type PlanProposal, type Role, type Snapshot } from '@coldlaunch/shared';
+import { GameClient, makeLink, makeMatchLink, normalizeCode, parseLink, stanceOf, type Focus, type GameEvent, type LatLon, type PlanProposal, type Role, type Snapshot } from '@coldlaunch/shared';
 import { Renderer, DynBatch, type FxSettings } from './gl.ts';
 import { GeoStore, bucketize } from './geo.ts';
 import { buildWorld, setFactionColors, LAYER_LIST, type LayerKey, type SceneState } from './scene.ts';
@@ -225,6 +225,14 @@ window.addEventListener('mousemove', (e) => {
     return;
   }
   const p = panelAt(panels, x, y);
+  if (ui.targeting) {
+    // targeting: show what a click would hit (snaps to ships, bases and cities near the cursor)
+    const t = p && p.kind === 'map' ? ui.targetFor(p.picks, x - p.px!.x, y - p.px!.y, 48 * st.dpr) : null;
+    st.targetHover = t && t.lat !== undefined ? { lat: t.lat, lon: t.lon!, name: t.name } : null;
+    const neutral = t && ui.targeting.accept !== 'place' && t.side && t.side !== 'OTHER' && stanceOf(st.world, st.role, t.side) === 'neutral';
+    ui.tooltip(t ? `TARGET: ${t.name}${neutral ? ` · ${t.side} IS NEUTRAL — HITTING IT MAKES IT AN ENEMY` : ''}` : ui.targeting.accept === 'place' ? 'CLICK TO PICK THIS POINT' : 'NO TARGET HERE', e.clientX, e.clientY);
+    return;
+  }
   const hit = p && p.kind === 'map' ? nearestPick(p, x - p.px!.x, y - p.px!.y, 12 * st.dpr) : null;
   st.hover = hit?.id ?? null;
   ui.tooltip(hit ? hit.name : null, e.clientX, e.clientY);
@@ -239,7 +247,7 @@ window.addEventListener('mouseup', (e) => {
   const hit = nearestPick(d.p, lx, ly, 12 * st.dpr);
   const ll = d.p.xf ? fromXf(d.p, lx, ly) : null;
   if (ui.targeting) {
-    ui.completeTarget(hit?.id ?? null, ll);
+    ui.completeTarget(ui.targetFor(d.p.picks, lx, ly, 48 * st.dpr), ll);
     return;
   }
   st.selected = hit?.id ?? null;
@@ -261,9 +269,10 @@ canvas.addEventListener('contextmenu', (e) => {
   const [x, y] = devXY(e);
   const p = panelAt(panels, x, y);
   if (!p || p.kind !== 'map') return;
-  const hit = nearestPick(p, x - p.px!.x, y - p.px!.y, 14 * st.dpr);
+  // right-click picks own units, contacts and city names (a little more generous than a plain click)
+  const hit = nearestPick(p, x - p.px!.x, y - p.px!.y, 18 * st.dpr);
   const ll = fromXf(p, x - p.px!.x, y - p.px!.y);
-  ui.contextMenu(e.clientX, e.clientY, hit?.id ?? null, ll);
+  ui.contextMenu(e.clientX, e.clientY, hit && hit.kind !== 'missile' ? hit : null, ll);
 });
 
 import { fromScreen } from './proj.ts';
@@ -364,8 +373,8 @@ canvas.addEventListener('touchstart', (e) => {
     const t0 = e.touches[0];
     touch.timer = window.setTimeout(() => {
       if (!touch || touch.moved) return;
-      const hit = nearestPick(p, x - p.px!.x, y - p.px!.y, 24 * st.dpr);
-      ui.contextMenu(t0.clientX, t0.clientY, hit?.id ?? null, fromXf(p, x - p.px!.x, y - p.px!.y));
+      const hit = nearestPick(p, x - p.px!.x, y - p.px!.y, 28 * st.dpr);
+      ui.contextMenu(t0.clientX, t0.clientY, hit && hit.kind !== 'missile' ? hit : null, fromXf(p, x - p.px!.x, y - p.px!.y));
       touch = null;
     }, 550);
   }
@@ -400,7 +409,7 @@ canvas.addEventListener('touchend', (e) => {
   const p = t.p;
   const lx = t.x - p.px!.x, ly = t.y - p.px!.y;
   const hit = nearestPick(p, lx, ly, 24 * st.dpr);
-  if (ui.targeting) return ui.completeTarget(hit?.id ?? null, fromXf(p, lx, ly));
+  if (ui.targeting) { ui.completeTarget(ui.targetFor(p.picks, lx, ly, 56 * st.dpr), fromXf(p, lx, ly)); return; }
   st.selected = hit?.id ?? null;
   if (hit) {
     const u = [...(client.snap?.units ?? []), ...(client.snap?.contacts ?? [])].find((q) => q.id === hit.id);
@@ -450,6 +459,9 @@ function frame(now: number) {
   else if (work < 5) { slowFrames = 0; if (++fastFrames > 600 && autoScale < 1) { autoScale = Math.min(1, autoScale * 1.15); fastFrames = 0; relayout(); } }
   requestAnimationFrame(frame);
 }
+
+// ?debug=1: expose internals for automated UI checks (never needed to play)
+if (params.has('debug')) (window as unknown as { __cl: unknown }).__cl = { ui, st, client, panels: () => panels };
 
 async function boot() {
   relayout();

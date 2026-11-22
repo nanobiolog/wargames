@@ -377,3 +377,10 @@ body:not(.phone) .toolbar.faded ~ .matchbar:hover, body:not(.phone) .matchbar:fo
 .room { background: rgba(2, 8, 20, 0.985); }
 
 .room .r-done { display: none; }
+
+/* right-click menu: sections, scrolls if it ever gets taller than the screen */
+.menu { max-height: 86vh; overflow: auto; min-width: 270px; }
+.menu .mhead { padding: 6px 10px 3px; color: #6fc0ff; font-size: 10px; letter-spacing: 0.12em; border-top: 1px solid #10305a; }
+.menu .mhead:first-child { border-top: none; color: #fff; font-size: 11px; }
+.menu .mnote { padding: 4px 10px 8px; color: #7fa9cc; font-size: 11px; }
+.menu button.danger { color: #ff8a80; }
