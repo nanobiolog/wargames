@@ -21,18 +21,26 @@ export interface Settings {
   quality: 'low' | 'medium' | 'high' | 'ultra';
   fpsCap: 0 | 30 | 60; // 0 = display refresh rate
   dprCap: number; // max device-pixel ratio rendered
+  /** most canvas pixels to render, in megapixels (0 = no limit beyond dprCap) */
+  pixelBudget: number;
+  /** settings format: 2 = pixel budget + 30 fps default */
+  v?: number;
   reduceMotion: boolean;
   aiModel: string; // provider:model used for this browser's AI work
 }
 
-export const QUALITY: Record<Settings['quality'], { fx: Partial<FxSettings>; dpr: number; fps: Settings['fpsCap']; label: string }> = {
-  low: { fx: { bloom: 0, persistence: 0.5, scanlines: 0 }, dpr: 1, fps: 30, label: 'Low — laptops on battery, old phones' },
-  medium: { fx: { bloom: 0.35, persistence: 0.75, scanlines: 0.15 }, dpr: 1.5, fps: 60, label: 'Medium — most machines' },
-  high: { fx: { bloom: 0.55, persistence: 0.8, scanlines: 0.3 }, dpr: 2, fps: 60, label: 'High — default look' },
-  ultra: { fx: { bloom: 0.9, persistence: 0.88, scanlines: 0.35 }, dpr: 3, fps: 0, label: 'Ultra — big wall displays' },
+export const QUALITY: Record<Settings['quality'], { fx: Partial<FxSettings>; dpr: number; fps: Settings['fpsCap']; mp: number; label: string }> = {
+  low: { fx: { bloom: 0, persistence: 0.5, scanlines: 0 }, dpr: 1, fps: 30, mp: 0.9, label: 'Low — laptops on battery, old phones' },
+  medium: { fx: { bloom: 0.35, persistence: 0.75, scanlines: 0.15 }, dpr: 1.5, fps: 30, mp: 1.6, label: 'Medium — cool and quiet' },
+  high: { fx: { bloom: 0.55, persistence: 0.8, scanlines: 0.3 }, dpr: 2, fps: 30, mp: 2.6, label: 'High — default look' },
+  ultra: { fx: { bloom: 0.9, persistence: 0.88, scanlines: 0.35 }, dpr: 3, fps: 60, mp: 8, label: 'Ultra — big wall displays (hot)' },
 };
 
-export const DEFAULT_SETTINGS: Settings = { quality: 'high', fpsCap: 60, dprCap: 2, reduceMotion: false, aiModel: 'claude:claude-haiku-5-5' };
+/**
+ * Defaults keep laptops cool: 30 fps and about 2.6 megapixels (a Retina laptop would otherwise draw
+ * ~6 MP with several bloom passes, 60-120 times a second).
+ */
+export const DEFAULT_SETTINGS: Settings = { quality: 'high', fpsCap: 30, dprCap: 2, pixelBudget: 2.6, reduceMotion: false, aiModel: 'claude:claude-haiku-5-5', v: 2 };
 
 interface Identity {
   player: string; // random, stable per browser
@@ -690,10 +698,10 @@ export class Online {
       <div class="tab inv"></div>
       <div class="tab graphics">
         <label class="row">Quality <select class="quality">${Object.entries(QUALITY).map(([q, v]) => `<option value="${q}" ${q === s.quality ? 'selected' : ''}>${v.label}</option>`).join('')}</select></label>
-        <label class="row">Frame-rate cap <select class="fps"><option value="30">30 fps (saves battery)</option><option value="60">60 fps</option><option value="0">Display refresh rate</option></select></label>
-        <label class="row">Resolution <select class="dpr"><option value="1">Standard (fastest)</option><option value="1.5">Sharp</option><option value="2">Retina</option><option value="3">Native 4K/5K</option></select></label>
+        <label class="row">Frame rate <select class="fps"><option value="30">30 fps (recommended, cool)</option><option value="60">60 fps (smoother, warmer)</option><option value="0">Display refresh rate (hot on 120 Hz)</option></select></label>
+        <label class="row">Resolution <select class="dpr"><option value="0.9">Efficient (~1 MP)</option><option value="1.6">Balanced (~1.6 MP)</option><option value="2.6">Sharp (~2.6 MP, default)</option><option value="5">Retina (~5 MP)</option><option value="0">Native (no limit, hottest)</option></select></label>
         <label class="row"><input type="checkbox" class="rm" ${s.reduceMotion ? 'checked' : ''}> Reduce motion (no camera fly-overs or phosphor trails)</label>
-        <p class="hint">The map is drawn once into GPU buffers and only moving tracks are redrawn each frame; drawing pauses when the tab is hidden. Lower settings mainly save GPU on 4K screens and phones.</p>
+        <p class="hint">Rendering slows down by itself when it can: about 8 fps while a menu covers the map, about 12 fps while the match is paused, over or in the room and you aren't touching anything, nothing at all in a hidden tab. If frames get slow it lowers the resolution until they are fast again.</p>
       </div>
       <div class="tab player">
         <label class="row">Callsign <input class="callsign" maxlength="20" value="${esc(this.id.name)}"> <button class="small dice">⚄</button></label>
@@ -722,18 +730,18 @@ export class Online {
     q<HTMLButtonElement>('.close').onclick = () => S.classList.add('hidden');
     const save = () => { this.host.store.set('settings', s); this.host.applySettings(); };
     const fps = q<HTMLSelectElement>('.fps'); fps.value = String(s.fpsCap);
-    const dpr = q<HTMLSelectElement>('.dpr'); dpr.value = String(s.dprCap);
+    const dpr = q<HTMLSelectElement>('.dpr'); dpr.value = String(s.pixelBudget);
     q<HTMLSelectElement>('.quality').onchange = (e) => {
       const v = (e.target as HTMLSelectElement).value as Settings['quality'];
       const p = QUALITY[v];
-      s.quality = v; s.fpsCap = p.fps; s.dprCap = p.dpr;
+      s.quality = v; s.fpsCap = p.fps; s.dprCap = p.dpr; s.pixelBudget = p.mp;
       Object.assign(this.host.fx, p.fx);
-      fps.value = String(s.fpsCap); dpr.value = String(s.dprCap);
+      fps.value = String(s.fpsCap); dpr.value = String(s.pixelBudget);
       this.host.store.set('fx2', this.host.fx);
       save();
     };
     fps.onchange = () => { s.fpsCap = +fps.value as Settings['fpsCap']; save(); };
-    dpr.onchange = () => { s.dprCap = +dpr.value; save(); };
+    dpr.onchange = () => { s.pixelBudget = +dpr.value; s.dprCap = s.pixelBudget === 0 ? 3 : Math.max(s.dprCap, 2); save(); };
     q<HTMLInputElement>('.rm').onchange = (e) => { s.reduceMotion = (e.target as HTMLInputElement).checked; save(); };
     const cs = q<HTMLInputElement>('.callsign');
     cs.onchange = () => { const n = cleanCallsign(cs.value); if (n) { this.id.name = n; this.host.store.set('identity', this.id); this.refreshSession(); } cs.value = this.id.name; };

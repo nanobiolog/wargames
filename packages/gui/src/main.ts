@@ -31,7 +31,15 @@ const st: SceneState = {
 };
 const fx: FxSettings = { bloom: 0.55, persistence: 0.8, scanlines: 0.3, exposure: 1.05, ...store.get('fx2', {}) };
 const smallTouch = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 700;
-const settings: Settings = { ...DEFAULT_SETTINGS, ...(smallTouch ? { fpsCap: 30, dprCap: 2 } : {}), ...store.get<Partial<Settings>>('settings', {}) };
+const savedSettings = store.get<Partial<Settings>>('settings', {});
+// settings saved before the pixel budget existed: keep the player's choices, take the new cooler defaults
+if (savedSettings.v !== 2) { delete savedSettings.fpsCap; delete savedSettings.dprCap; delete savedSettings.pixelBudget; }
+const settings: Settings = { ...DEFAULT_SETTINGS, ...(smallTouch ? { fpsCap: 30, pixelBudget: 1.6 } : {}), ...savedSettings, v: 2 };
+/** automatic resolution step-down when frames are slow (1 = full budget) */
+let autoScale = 1;
+/** last time the player touched anything (frame throttling) */
+let lastInput = performance.now();
+for (const ev of ['pointermove', 'pointerdown', 'wheel', 'keydown', 'touchstart']) window.addEventListener(ev, () => { lastInput = performance.now(); }, { passive: true, capture: true });
 const fxPersistence = fx.persistence;
 function applySettings() {
   MOTION.flyMs = settings.reduceMotion || matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 900;
@@ -64,7 +72,10 @@ function makeGrids() {
 // ------------------------------------------------------------------ layout
 
 function relayout() {
-  const dpr = Math.min(settings.dprCap, window.devicePixelRatio || 1);
+  // resolution: device pixels, capped by the pixel budget (and stepped down if frames are slow)
+  const css = window.innerWidth * window.innerHeight;
+  const budget = settings.pixelBudget > 0 ? settings.pixelBudget * 1e6 * autoScale : Infinity;
+  const dpr = Math.max(0.6, Math.min(settings.dprCap, window.devicePixelRatio || 1, Math.sqrt(budget / Math.max(1, css))));
   st.dpr = dpr;
   const W = Math.floor(window.innerWidth * dpr), H = Math.floor(window.innerHeight * dpr);
   r.resize(W, H);
@@ -401,10 +412,23 @@ canvas.addEventListener('touchend', (e) => {
 // ------------------------------------------------------------------ frame loop
 
 let lastFrame = 0;
+let slowFrames = 0, fastFrames = 0;
+const MODALS = '.lobby:not(.hidden), .settings:not(.hidden), .sharesheet:not(.hidden), .connect:not(.hidden)';
+/** frames per second wanted right now: full rate while playing, much less while nothing changes */
+function targetFps(): number {
+  const cap = settings.fpsCap || 120;
+  if (document.querySelector(MODALS)) return Math.min(cap, 8); // a menu covers the map
+  const s = client.snap;
+  const idle = performance.now() - lastInput > 3000;
+  if (idle && (!s || s.paused || s.over || client.lobby?.phase === 'lobby')) return Math.min(cap, 12);
+  return cap;
+}
 function frame(now: number) {
-  // frame-rate cap (Settings → Graphics): skip this vsync if we drew too recently
-  if (settings.fpsCap && now - lastFrame < 1000 / settings.fpsCap - 2) { requestAnimationFrame(frame); return; }
+  // frame-rate cap + idle throttling: skip this vsync if we drew recently enough
+  const fps = targetFps();
+  if (now - lastFrame < 1000 / fps - 2) { requestAnimationFrame(frame); return; }
   lastFrame = now;
+  const work0 = performance.now();
   const s = client.snap;
   st.snap = s;
   st.world = client.world;
@@ -420,6 +444,10 @@ function frame(now: number) {
     drawPanel(ctx, p, now);
   }
   r.endFrame(fx);
+  // adaptive resolution: frames that take long (CPU, and the GPU stalls they include) step it down
+  const work = performance.now() - work0;
+  if (work > 14) { fastFrames = 0; if (++slowFrames > 45 && autoScale > 0.35) { autoScale *= 0.8; slowFrames = 0; relayout(); } }
+  else if (work < 5) { slowFrames = 0; if (++fastFrames > 600 && autoScale < 1) { autoScale = Math.min(1, autoScale * 1.15); fastFrames = 0; relayout(); } }
   requestAnimationFrame(frame);
 }
 

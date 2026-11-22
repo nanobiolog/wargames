@@ -309,3 +309,7 @@ body:not(.phone) .toolbar.faded ~ .matchbar:hover, body:not(.phone) .matchbar:fo
 .room select:disabled, .room input:disabled { opacity: 0.6; }
 .matchbar .roombtn { border-color: #ffd76a; color: #ffe9a8; }
 .room .room-invite { border-color: #5cff8a; color: #b8ffd0; }
+
+/* panels opened from the match room sit above it */
+.sharesheet, .settings { z-index: 14; }
+.room { background: rgba(2, 8, 20, 0.985); }
