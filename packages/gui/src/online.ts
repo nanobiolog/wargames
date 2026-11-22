@@ -7,7 +7,7 @@
 // provider, straight from this device.
 import {
   normalizeCode, randomCallsign, cleanCallsign, shortCode, makeMatchLink,
-  type AiJob, type GameClient, type LobbyState, type RosterEntry, type Side,
+  type AiJob, type Branch, type GameClient, type LobbyState, type RosterEntry, type Side,
 } from '@coldlaunch/shared';
 import type { FxSettings } from './gl.ts';
 import QRCode from 'qrcode';
@@ -551,97 +551,108 @@ export class Online {
     const lobby = st.phase === 'lobby';
     const o = st.options;
     const multi = st.nations.length > 2;
-    const sc = this.scenarios;
-    const branchName: Record<string, string> = { commander: 'COMMANDER', navy: 'NAVY', air: 'AIR FORCE', rocket: 'ROCKETS' };
-    const lock = host && lobby ? '' : 'disabled';
-    const oppOptions = multi
-      ? [['human', 'Friends take seats — the AI plays every empty nation'], ['rules', 'Doctrine AI plays every empty nation'], ['byok', 'Host\'s AI key plays the main adversary, doctrine AI the rest']]
-      : [['human', 'A friend plays the other side'], ['rules', 'Doctrine AI plays the other side'], ['byok', 'LLM with the host\'s own AI key plays the other side']];
+    const editable = host && lobby;
+    const BR: [Branch, string, string][] = [['commander', 'CMD', 'Commander: DEFCON, hotline, and every branch nobody holds'], ['navy', 'NAVY', 'Carriers, surface groups, submarines, ship missiles'], ['air', 'AIR', 'Bomber and fighter bases, bombers, land-based jets and drones'], ['rocket', 'RKT', 'ICBM fields']];
+    const seg = (cls: string, opts: [string, string, string?][], cur: string) =>
+      `<div class="seg ${cls}">${opts.map(([v, l, t]) => `<button data-v="${v}" class="${v === cur ? 'on' : ''}" ${editable ? '' : 'disabled'} ${t ? `title="${esc(t)}"` : ''}>${l}</button>`).join('')}</div>`;
+    const scenarios = this.scenarios.length ? this.scenarios : [{ id: o.scenario, name: o.scenarioName, factions: [] as unknown[] }];
+    const temper = o.personality < 0.35 ? 'dove' : o.personality > 0.7 ? 'hawk' : 'balanced';
+    const summary = `${o.scenarioName} · ${o.opponent === 'human' ? (multi ? 'friends + AI' : 'vs friend') : o.opponent === 'rules' ? 'vs AI' : 'AI key'} · ${temper} · x${o.speed} · ${o.endMode === 'open' ? 'play on' : 'classic end'}`;
     R.innerHTML = `
-      <div class="ph">MATCH ${esc(c.match?.code ?? '')} · ${lobby ? 'ROOM — NOT STARTED' : st.phase === 'over' ? 'FINISHED' : 'IN PROGRESS'} <button class="small close">×</button></div>
-      <div class="line"><button class="small room-invite">INVITE FRIENDS</button><button class="small gfx">SETTINGS</button><span class="hint">host: ${esc(st.host)}${host ? ' (you)' : ''}</span></div>
-      <div class="sec">
-        <div class="lbl">MATCH SETTINGS ${host && lobby ? '' : '<span class="hint">— set by the host before the start</span>'}</div>
-        <label class="row">Scenario <select class="r-scen" ${lock}>${(sc.length ? sc : [{ id: o.scenario, name: o.scenarioName, factions: [] }]).map((x) => `<option value="${x.id}" ${x.id === o.scenario ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
-        <label class="row">Opponents <select class="r-opp" ${lock}>${oppOptions.map(([v, l]) => `<option value="${v}" ${v === o.opponent ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-        <label class="row">AI temperament <input type="range" class="r-pers" min="0" max="1" step="0.05" value="${o.personality}" ${lock}><span class="r-persv">${o.personality < 0.3 ? 'dove' : o.personality > 0.7 ? 'hawk' : 'balanced'}</span></label>
-        <label class="row">Time compression <select class="r-speed" ${lock}>${[5, 10, 20, 30, 60].map((v) => `<option value="${v}" ${v === o.speed ? 'selected' : ''}>x${v}</option>`).join('')}</select></label>
-        <label class="row">Ending <select class="r-end" ${lock}>
-          <option value="open" ${o.endMode === 'open' ? 'selected' : ''}>Play on until one nation or alliance is left (or the host ends it)</option>
-          <option value="classic" ${o.endMode === 'classic' ? 'selected' : ''}>Classic scenario endings (time limit, crisis defused)</option>
-        </select></label>
+      <div class="r-head">
+        <div class="r-title"><b>MATCH ${esc(c.match?.code ?? '')}</b> <span class="r-phase ph-${st.phase}">${lobby ? 'ROOM · NOT STARTED' : st.phase === 'over' ? 'FINISHED' : 'IN PROGRESS'}</span></div>
+        <div class="r-tools"><button class="small room-invite">INVITE</button><button class="small gfx">SETTINGS</button><button class="small close" title="Close (the match keeps going)">×</button></div>
       </div>
-      <div class="sec nations"><div class="lbl">NATIONS — pick one and a branch; several players can share a nation</div></div>
-      <div class="sec specs"><div class="lbl">WATCHING</div><div class="speclist">${st.spectators.map((x) => `${esc(x.name)}${x.you ? ' (you)' : ''}`).join(', ') || '<span class="hint">nobody</span>'}</div>
-        <button class="small watch" ${st.you.role === 'SPECTATOR' ? 'disabled' : ''}>WATCH INSTEAD</button></div>
-      <div class="foot room-foot"></div>`;
+      <div class="r-body">
+        <div class="r-settings">
+          <button class="r-sumtoggle">MATCH SETTINGS <span>${esc(summary)}</span></button>
+          <div class="r-opts">
+            <div class="r-note">${editable ? 'You are the host: tap to change.' : `Set by ${esc(st.host)}${lobby ? ' before the start' : ''}.`}</div>
+            <div class="r-lbl">Scenario</div>${seg('r-scen', scenarios.map((x) => [x.id, x.id === '1983' ? '1983 · 2 nations' : `${esc(x.name.replace(/^\d+\s*/, '').split(' ')[0])} · ${(x.factions as unknown[]).length || 5} nations`, x.name] as [string, string, string]), o.scenario)}
+            <div class="r-lbl">Opponents</div>${seg('r-opp', multi
+              ? [['human', 'FRIENDS + AI', 'Friends take seats; the AI plays every empty nation'], ['rules', 'AI ONLY', 'The doctrine AI plays every other nation'], ['byok', 'MY AI KEY', 'Your own AI key plays the main adversary; doctrine AI the rest']]
+              : [['human', 'A FRIEND', 'A friend plays the other side'], ['rules', 'DOCTRINE AI', 'Built-in AI, free'], ['byok', 'MY AI KEY', 'An LLM with the host\'s own key plays the other side']], o.opponent)}
+            <div class="r-lbl">AI temperament</div>${seg('r-pers', [['0.2', 'DOVE'], ['0.5', 'BALANCED'], ['0.85', 'HAWK']], temper === 'dove' ? '0.2' : temper === 'hawk' ? '0.85' : '0.5')}
+            <div class="r-lbl">Time compression</div>${seg('r-speed', [5, 10, 20, 30, 60].map((v) => [String(v), `x${v}`] as [string, string]), String(o.speed))}
+            <div class="r-lbl">Ending</div>${seg('r-end', [['open', 'PLAY ON', 'Until one nation or alliance is left, or the host ends it'], ['classic', 'CLASSIC', 'Scenario endings: time limit, crisis defused']], o.endMode)}
+            <button class="r-done">DONE</button>
+          </div>
+        </div>
+        <div class="r-nations"></div>
+      </div>
+      <div class="r-foot">
+        <div class="r-watch"><span>Watching: ${st.spectators.map((x) => `${esc(x.name)}${x.you ? ' (you)' : ''}`).join(', ') || 'nobody'}</span>
+          <button class="small watch" ${st.you.role === 'SPECTATOR' ? 'disabled' : ''}>WATCH</button></div>
+        <div class="r-actions"></div>
+      </div>`;
     const q = <T extends HTMLElement>(sel: string) => R.querySelector(sel) as T;
     q<HTMLButtonElement>('.close').onclick = () => { this.roomOpen = false; R.classList.add('hidden'); };
     q<HTMLButtonElement>('.room-invite').onclick = () => { this.openShare(); };
     q<HTMLButtonElement>('.gfx').onclick = () => this.openSettings();
-    if (host && lobby) {
-      q<HTMLSelectElement>('.r-scen').onchange = (e) => c.configure({ scenario: (e.target as HTMLSelectElement).value });
-      q<HTMLSelectElement>('.r-opp').onchange = (e) => {
-        const v = (e.target as HTMLSelectElement).value as 'human' | 'rules' | 'byok';
+    q<HTMLButtonElement>('.r-sumtoggle').onclick = () => R.classList.toggle('opts-open');
+    q<HTMLButtonElement>('.r-done').onclick = () => R.classList.remove('opts-open');
+    const wire = (cls: string, fn: (v: string) => void) => {
+      for (const b of R.querySelectorAll<HTMLButtonElement>(`.${cls} button`)) b.onclick = () => { if (!b.classList.contains('on')) fn(b.dataset.v!); };
+    };
+    if (editable) {
+      wire('r-scen', (v) => c.configure({ scenario: v }));
+      wire('r-opp', (v) => {
         if (v === 'byok' && !this.hasKey()) this.host.toast('ADD YOUR AI KEY IN SETTINGS — IT STAYS IN THIS BROWSER', 'bad');
-        c.configure({ opponent: v });
-      };
-      const pers = q<HTMLInputElement>('.r-pers');
-      pers.oninput = () => { const v = +pers.value; q<HTMLElement>('.r-persv').textContent = v < 0.3 ? 'dove' : v > 0.7 ? 'hawk' : 'balanced'; };
-      pers.onchange = () => c.configure({ personality: +pers.value });
-      q<HTMLSelectElement>('.r-speed').onchange = (e) => c.configure({ speed: +(e.target as HTMLSelectElement).value });
-      q<HTMLSelectElement>('.r-end').onchange = (e) => c.configure({ endMode: (e.target as HTMLSelectElement).value as 'open' | 'classic' });
+        c.configure({ opponent: v as 'human' | 'rules' | 'byok' });
+      });
+      wire('r-pers', (v) => c.configure({ personality: +v }));
+      wire('r-speed', (v) => c.configure({ speed: +v }));
+      wire('r-end', (v) => c.configure({ endMode: v as 'open' | 'classic' }));
     }
-    // nations, crews and seat buttons
-    const box = q<HTMLElement>('.nations');
+    // nations: one card each, four branch buttons (yours / taken / free)
+    const box = q<HTMLElement>('.r-nations');
     for (const n of st.nations) {
-      const row = h('div', `nation${n.out ? ' out' : ''}${st.you.role === n.id ? ' mine' : ''}`);
-      row.style.borderLeftColor = n.color;
-      const crew = n.crew.map((m) => `<span class="chip${m.you ? ' you' : ''}${m.online ? '' : ' away'}">${esc(m.name)} · ${branchName[m.branch]}</span>`).join(' ');
+      const card = h('div', `nation${n.out ? ' out' : ''}${st.you.role === n.id ? ' mine' : ''}`);
+      card.style.setProperty('--nc', n.color);
       const status = n.out ? '<span class="tag out">OUT</span>' : n.reservedForAi ? '<span class="tag ai">AI OPPONENT</span>' : n.ai ? '<span class="tag ai">AI</span>' : '';
-      row.innerHTML = `<div class="nhead"><b style="color:${n.color}">${esc(n.name)}</b> ${status}</div><div class="hint">${esc(n.brief)}</div><div class="crew">${crew}</div>`;
+      card.innerHTML = `<div class="nhead"><b>${esc(n.name)}</b>${status}</div><div class="nbrief" title="${esc(n.brief)}">${esc(n.brief)}</div>`;
       const canSit = !n.out && !n.reservedForAi && n.playable && (lobby || n.ai || st.you.role === n.id);
-      if (canSit) {
-        const taken = new Set(n.crew.filter((m) => !m.you).map((m) => m.branch));
-        const free = (['commander', 'navy', 'air', 'rocket'] as const).filter((b) => !taken.has(b));
-        if (free.length) {
-          const line = h('div', 'line');
-          const sel = h('select') as HTMLSelectElement;
-          sel.innerHTML = free.map((b) => `<option value="${b}" ${st.you.role === n.id && st.you.branch === b ? 'selected' : ''}>${branchName[b]}</option>`).join('');
-          const btn = h('button', 'small go', st.you.role === n.id ? 'CHANGE BRANCH' : 'SIT HERE');
-          btn.onclick = () => c.takeSeat(n.id, sel.value as 'commander' | 'navy' | 'air' | 'rocket');
-          line.append(sel, btn);
-          row.append(line);
-        }
+      const row = h('div', 'branches');
+      for (const [br, label, tip] of BR) {
+        const holder = n.crew.find((m) => m.branch === br);
+        const mine = holder?.you;
+        const b = h('button', `br${mine ? ' mine' : holder ? ' taken' : ''}`) as HTMLButtonElement;
+        b.innerHTML = `<span>${label}</span><small>${holder ? esc(holder.name) : canSit ? 'free' : '—'}</small>`;
+        b.title = `${tip}${holder ? ` — ${holder.name}` : ''}`;
+        b.disabled = !canSit || (!!holder && !mine);
+        if (canSit && !holder) b.onclick = () => c.takeSeat(n.id, br);
+        row.append(b);
       }
-      box.append(row);
+      card.append(row);
+      box.append(card);
     }
     q<HTMLButtonElement>('.watch').onclick = () => c.takeSeat('SPECTATOR');
-    // footer: start / end / resign
-    const foot = q<HTMLElement>('.room-foot');
+    const act = q<HTMLElement>('.r-actions');
     if (host && lobby) {
-      const b = h('button', 'big create', 'START MATCH');
+      const b = h('button', 'big start', 'START MATCH');
       b.onclick = () => c.startMatch();
-      foot.append(b);
+      act.append(b);
     } else if (lobby) {
-      foot.append(h('p', 'hint', `Waiting for ${esc(st.host)} to start the match…`));
+      act.append(h('span', 'r-wait', `Waiting for ${esc(st.host)} to start…`));
     }
     if (!lobby && st.phase !== 'over' && st.you.role !== 'SPECTATOR' && o.endMode === 'open') {
-      const b = h('button', 'danger', 'RESIGN — STAND DOWN AND WATCH');
+      const b = h('button', 'danger', 'RESIGN');
+      b.title = 'Stand down for good and watch the rest of the war';
       b.onclick = () => { if (confirm('Your nation stands down for good and you watch the rest of the war. Resign?')) void c.cmd({ op: 'resign' }); };
-      foot.append(b);
+      act.append(b);
     }
     if (host && !lobby) {
       if (st.phase !== 'over') {
-        const b = h('button', 'danger', 'END MATCH FOR EVERYONE');
+        const b = h('button', 'danger', 'END MATCH');
         b.onclick = () => { if (confirm('End the match for everyone?')) c.endMatch(); };
-        foot.append(b);
+        act.append(b);
       }
-      const n = h('button', 'small', 'NEW MATCH (BACK TO THE ROOM)');
+      const n = h('button', '', 'NEW MATCH');
+      n.title = 'Back to the room with a fresh game';
       n.onclick = () => c.newGame();
-      foot.append(n);
+      act.append(n);
     }
-    if (!sc.length) void this.loadScenarios().then(() => { if (this.roomOpen && c.lobby) this.renderRoom(c.lobby); });
+    if (!this.scenarios.length) void this.loadScenarios().then(() => { if (this.roomOpen && c.lobby) this.renderRoom(c.lobby); });
     R.classList.remove('hidden');
     this.lobby.classList.add('hidden');
   }

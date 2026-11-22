@@ -82,6 +82,8 @@ export class MatchRoom extends DurableObject<Env> {
   /** crews per nation (first member = whoever sat down first) */
   private crews: Partial<Record<Side, CrewMember[]>> = {};
   private readonly bootAt = Date.now();
+  /** when the host's last screen dropped */
+  private hostLeftAt = 0;
   private lastJoin = new Map<string, number>();
   private conns = new Map<WebSocket, Live>();
   private timer?: ReturnType<typeof setInterval>;
@@ -234,9 +236,27 @@ export class MatchRoom extends DurableObject<Env> {
     return null;
   }
 
+  /**
+   * The host controls the room. Normally the creator (by player id, whatever nation they sit at).
+   * If the host has been gone from the room for SEAT_GRACE_MS, the longest-present player acts as
+   * host so a room can never get stuck waiting for START.
+   */
   private isHost(c: Live) {
-    if (this.cfg!.hostPlayer) return c.player === this.cfg!.hostPlayer;
-    return (this.crews[this.cfg!.hostSide] ?? [])[0]?.player === c.player;
+    const hp = this.cfg!.hostPlayer;
+    if (hp && (this.online(hp) || Date.now() - Math.max(this.hostLeftAt, this.bootAt) < SEAT_GRACE_MS)) return c.player === hp;
+    const acting = [...this.conns.values()].find((o) => o.authed && o.kind !== 'ai');
+    return !!acting && acting.player === c.player;
+  }
+
+  /** Matches created before the host's player id was stored: adopt the creator when they show up. */
+  private adoptHost(c: Live) {
+    const cfg = this.cfg!;
+    if (cfg.hostPlayer) return;
+    const first = (this.crews[cfg.hostSide] ?? [])[0]?.player;
+    if (c.player === first || (cfg.host && c.name === cfg.host)) {
+      cfg.hostPlayer = c.player;
+      this.ctx.storage.put('cfg', cfg);
+    }
   }
 
   // ------------------------------------------------------------------ WebSocket lifecycle
@@ -284,6 +304,7 @@ export class MatchRoom extends DurableObject<Env> {
     this.conns.delete(ws);
     for (const [id, j] of this.jobs) if (j.ws === ws) { clearTimeout(j.timer); this.jobs.delete(id); j.reject(new Error('AI host disconnected')); }
     if (c?.authed && !this.online(c.player)) {
+      if (c.player === this.cfg?.hostPlayer) this.hostLeftAt = Date.now();
       const mine = this.crewOf(c.player);
       if (mine) { mine.member.leftAt = Date.now(); this.ctx.storage.put('crews', this.crews); }
     }
@@ -313,6 +334,7 @@ export class MatchRoom extends DurableObject<Env> {
         c.name = cleanCallsign(m.name) ?? randomCallsign();
         c.kind = m.client;
         c.ai = !!m.caps?.includes('ai');
+        this.adoptHost(c);
         c.role = this.autoSeat(c, m.role ?? this.defaultRole(c));
         c.authed = true;
         c.eventIdx = Math.max(0, game.s.events.length - 200);
@@ -553,6 +575,11 @@ export class MatchRoom extends DurableObject<Env> {
       const mine = this.crewOf(c.player);
       if (running && mine && mine.side !== role && !g.isOut(mine.side)) return this.send(ws, { t: 'result', ok: false, msg: 'YOU CANNOT CHANGE NATION DURING THE MATCH' });
       this.join(role, c, branch);
+      if (!running && c.player === this.cfg!.hostPlayer && role !== this.cfg!.hostSide) {
+        this.cfg!.hostSide = role;
+        this.ctx.storage.put('cfg', this.cfg);
+        if (this.factions.length <= 2) this.setupAi();
+      }
     }
     // every screen of this player follows
     for (const [sock, cc] of this.conns) {
