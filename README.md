@@ -14,7 +14,9 @@ tools can command your side through **MCP**.
 | **Your AI key stays yours** | Bring your own Claude or Gemini key: it is stored only in your browser and goes straight to the provider |
 | **Terminal first** | `npm start -- --join K7M2Q` joins an online match from any terminal, with type-ahead for every order |
 | **Two scenarios** | **1983 Autumn Exercise** (USA vs USSR) and **2026 Straits Crisis**: five factions (USA, European coalition, Russia, China, India), alliances and a neutral that won't stay neutral if attacked. Up to 5 players, and the AI fills every empty seat |
-| **Naval aviation & intelligence** | Carriers fly recon, combat air patrols and conventional strikes; surface groups fight; coastal radars track ships; `intel` shows what your sensors see |
+| **Match rooms** | Creating a match opens a room: friends pick a nation and a **branch** (commander, navy, air force, rocket forces), so several players can run one country together. The host sets AI, speed and end rules, then presses START |
+| **Wars that run their course** | By default a match never stops at the scenario's time limit or when the crisis calms down. Nations that lose everything, or resign, drop out and their players watch the rest |
+| **Modern weapons & intelligence** | Reconnaissance satellites on real orbits, ISR drones and attack-drone swarms, low-flying cruise missiles, carrier recon / air patrols / strikes, surface battles and coastal radar. `intel` shows what your sensors see |
 
 The look is inspired by early-80s NORAD-style vector displays. The game, its name, its text and its endings are original.
 
@@ -127,6 +129,24 @@ tab at any time (`web conus`, `web missiles`, `web stats` …). If Electron isn'
 Online, pick the scenario and your faction in the lobby. Locally: `npm start -- --scenario modern --side CHN`.
 Forces sit at publicly known, approximate locations and are scaled for play, not accuracy.
 
+### Match rooms, branches and spectators
+
+Online matches open in a **room** with the clock stopped. Everyone picks a nation and a branch in the room; nobody has
+to rush, and late friends can still sit down. Branches split a nation's orders:
+
+| branch | gives the orders for |
+|---|---|
+| commander | DEFCON, hotline, resigning, and every branch nobody else holds |
+| navy | carriers, surface groups, submarines (including SLBM launches), carrier jets, ship cruise missiles |
+| air force | bomber bases and bombers, fighter bases, land-based jets and drones |
+| rocket forces | ICBM fields |
+
+The server checks every order against the sender's branch. The **host** sets scenario, opponents, AI temperament,
+speed and the ending rule in the room, then presses **START**. During the match the host can **END MATCH** for
+everyone or set up a **NEW MATCH**. In the default open-ended mode, a nation that has lost all its missiles,
+aircraft, ships and air bases is out, and so is one that types `resign`. Its players become **spectators**, and the match goes
+on until one nation or one alliance is left. In the terminal: `seat CHN navy`, `seat watch`, `start`, `endmatch`.
+
 ### Air operations and intelligence
 
 ```
@@ -136,6 +156,19 @@ airstrike cvbg-americas at sag-kirov x 10  # conventional raid on a ship group o
 intel                                    # what radars, satellites and recon flights are tracking
 hotline chn: we seek calm in the straits # in multi-faction games, address one nation
 ```
+
+Satellites, drones and cruise missiles:
+
+```
+drone m-int-kadena to east china sea         # ISR drone circles for hours (any DEFCON; easy to shoot down)
+drone m-ab-engels attack m-csg-qe x 20      # one-way attack-drone swarm at a ship group or base (DEFCON 2)
+cruise m-csg-ford at m-sag-northern x 8     # conventional cruise missiles from a ship or attack sub (DEFCON 2)
+```
+
+Every nation has reconnaissance satellites on circular orbits. Their ground tracks move over the rotating Earth, and
+ships under the swath are imaged. You can see everyone's satellites. Cruise missiles get no satellite launch warning,
+and only radars, fighters and ships close to their track pick them up. Point defence can engage only a few per minute,
+so a big salvo gets some through.
 
 Jets come from the group's own fighters, so a carrier with its air wing away defends itself less. Recon flights
 identify ships and aircraft and may catch a submarine near the surface. Surface groups that hold a contact on a hostile
@@ -220,6 +253,9 @@ This table is generated from the game's own command list (`npm run docs`).
 | `defcon &lt;1-5&gt;` | set your readiness level. DEFCON 5 is peacetime, 1 is maximum readiness. You can escalate only one level at a time, with about 90 game-seconds between steps. De-escalation is immediate. Bombers can take off at DEFCON 3 or lower; missile launches and bomber go-codes need DEFCON 1. The other side sees your change after an intelligence delay. | `defcon 4`<br>`defcon 5` | both |
 | `launch &lt;silo\|ssbn&gt; at &lt;target&gt; [x N]`<br>alias: `fire` | fire ballistic missiles (irreversible). Fires N missiles (default 1) from one of your ICBM fields or ballistic-missile submarines. The target can be a known enemy unit id, an enemy city, or coordinates like 55.7,37.6. Liftoff happens after a short authentication delay. Missiles cannot be recalled. Firing from a submarine reveals its position. | `launch icbm-minot at kozelsk x 3`<br>`launch ssbn-ohio at 55.7,37.6` | both |
 | `sortie &lt;carrier\|fighter base&gt; &lt;recon\|cap\|strike&gt; [to &lt;place\|target&gt;] [x N]`<br>alias: `recon`, `cap`, `airstrike` | fly jets from a carrier or fighter base: reconnaissance, air patrol or a strike. Draws aircraft from the carrier group's or base's fighters (which also defend it, so the group is weaker while they are away). RECON (any DEFCON, default 2 aircraft) flies to a point, searches ~350 km around it for 20 game-minutes, identifies ships, bombers and other flights, and reports. CAP, combat air patrol (DEFCON 4 or lower, default 4), orbits a point (default: over the carrier), shadows intruders and at DEFCON 3 shoots down hostile bombers and recon flights. STRIKE (DEFCON 2, default 8) is a conventional raid on a ship group or base; the target's air defence shoots some aircraft down. Flights come home when fuel runs low; recall brings them back early. Shortcuts: recon &lt;carrier&gt; to &lt;place&gt;, cap &lt;carrier&gt; [over &lt;place&gt;], airstrike &lt;carrier&gt; at &lt;target&gt;. | `recon cvbg-midway to sea of okhotsk`<br>`cap cvbg-eisenhower`<br>`airstrike cvbg-americas at sag-kirov x 10`<br>`sortie afb-elmendorf recon to bering sea` | both |
+| `drone &lt;base&gt; to &lt;place&gt;  ·  drone &lt;base&gt; attack &lt;target&gt; [x N]`<br>alias: `swarm` | ISR drones that watch an area for hours, or one-way attack-drone swarms. ISR drone (any DEFCON): flies slowly to a point and circles it until its fuel runs low (many hours), identifying ships and aircraft within ~250 km. Cheap, unmanned and easy to shoot down: hostile air defence fires on it from DEFCON 4. Attack swarm (DEFCON 2): one-way loitering munitions flown at a ship group or base; most are shot down by its air defence, each survivor does a little damage. Only bases and carriers that carry drones (modern scenario) can launch them. | `drone m-int-kadena to east china sea`<br>`drone m-ab-engels attack m-csg-qe x 20` | both |
+| `cruise &lt;surface group\|attack sub&gt; at &lt;target&gt; [x N]` | conventional cruise missiles at a military target. Fires N (default 4) subsonic, low-flying cruise missiles from a surface group or attack submarine at a ship group or base within range (1 200-1 600 km). They are not seen by satellites; only radars, fighters and ships close to their track pick them up, and air defence can shoot them down on the way. A ship target must still be near the aim point when they arrive. Firing reveals a submarine for a while. Requires DEFCON 2. | `cruise m-csg-ford at m-sag-northern x 8`<br>`cruise ssn-memphis at nb-severomorsk` | both |
+| `resign`<br>alias: `concede` | stand down for good and watch the rest of the war. In open-ended matches your nation leaves the war: its forces stand down and you (and everyone on your side) become spectators. The match goes on for the others. | `resign` | both |
 | `scramble &lt;base&gt; [N] [to &lt;place&gt;]` | launch bombers to a holding orbit. Sends N bombers (default: all) from a bomber base to a fail-safe orbit. Without "to", they fly to a default point toward the enemy. They wait there for a go-code (strike) and return home when fuel runs low; a tanker extends their time once. Requires DEFCON 3. | `scramble afb-loring`<br>`scramble afb-minot 3 to baffin bay` | both |
 | `strike &lt;bomber-group&gt; at &lt;target&gt;`<br>alias: `go` | send the go-code to an airborne bomber group. The group flies to the target and releases all its weapons, then heads home if it has the fuel. Interceptors and carrier air defence can shoot bombers down on the way. Requires DEFCON 1. | `strike bmr-loring-1 at murmansk` | both |
 | `recall &lt;bomber-group\|flight&gt;` | bring a bomber group home. Cancels an orbit or a strike that has not arrived yet; the aircraft return to base and can be scrambled again. | `recall bmr-loring-1` | both |
@@ -259,6 +295,9 @@ This table is generated from the game's own command list (`npm run docs`).
 | `speed &lt;x&gt;` | set time compression. Game seconds per real second (0.5-120). Keys [ and ] step through 1, 2, 5, 10, 20, 30, 60. | `speed 30` | both |
 | `pause` | pause the clock (space bar toggles). Everyone in the session sees the pause. | `pause` | both |
 | `resume` | resume the clock | `resume` | both |
+| `seat &lt;nation\|watch&gt; [commander\|navy\|air\|rocket]` | online matches: take a nation (and a branch), or watch. Before the start you can pick any free nation and branch; several players can share a nation, each commanding a branch (the commander covers branches nobody holds). During a match you can take over a nation the AI is playing, change branch, or watch. "seat watch" makes you a spectator. | `seat CHN`<br>`seat USA navy`<br>`seat watch` | both |
+| `start` | online matches (host): start the clock. Matches open in a room with the clock stopped so everyone can take a seat. The host starts them. | `start` | both |
+| `endmatch` | online matches (host): end the match for everyone. Open-ended matches keep going until one nation or alliance is left; the host can end them at any time. | `endmatch` | both |
 | `share`<br>alias: `qr` | share this game with phones and other PCs (QR codes). Opens the game to your local network (no restart needed) and shows QR codes. Scan one with a phone to get the map plus a touch console, or open the links on another PC. Only the machine running the game can switch sharing on. Anyone with the link can join, so use it on trusted networks. | `share` | both |
 | `link` | list the join links as text (no QR) | `link` | both |
 | `gui` | open the wall display (your saved display mode) | `gui` | terminal |

@@ -114,6 +114,19 @@ export class TuiApp {
     this.client.on('status', (s: string) => {
       this.sys(s.toUpperCase(), s.startsWith('ERROR') || s === 'disconnected' ? COL.red : COL.dim);
     });
+    // online match room: say what is going on when the phase changes (lobby → running → over)
+    this.client.on('lobby', (st) => {
+      const key = `${st.phase}:${st.you.role}:${st.you.branch ?? ''}`;
+      if (key === this.roomNoted) return;
+      this.roomNoted = key;
+      const seats = st.nations.map((n) => `${n.id} ${n.out ? 'OUT' : n.crew.length ? n.crew.map((m) => `${m.name}/${m.branch}`).join('+') : n.ai ? 'AI' : '—'}`).join(' · ');
+      if (st.phase === 'lobby') {
+        this.sys(`ROOM ${this.client.match?.code ?? ''} — NOT STARTED · YOU: ${st.you.role}${st.you.branch ? ` ${st.you.branch.toUpperCase()}` : ''} · ${seats}`, COL.yellow);
+        this.sys(st.youAreHost ? 'you are the host: type start when everyone is seated (seat <nation> [branch] to move)' : `waiting for ${st.host} to start · seat <nation> [commander|navy|air|rocket] to change seat`, COL.dim);
+      } else if (st.phase === 'running') this.sys(`MATCH RUNNING · YOU: ${st.you.role}${st.you.branch ? ` ${st.you.branch.toUpperCase()}` : ''} · ${seats}`, COL.green);
+      else this.sys('MATCH OVER', COL.yellow);
+      this.dirty = true;
+    });
     this.client.on('focus', ({ focus, from }: { focus: Focus; from: string }) => {
       if (!this.sync) return;
       if (focus.unit) this.selected = focus.unit;
@@ -157,6 +170,8 @@ export class TuiApp {
   private side(): Side | 'SPECTATOR' {
     return (this.client.role ?? 'USA') as Side | 'SPECTATOR';
   }
+
+  private roomNoted = '';
 
   /** your faction first, then the others in scenario order (classic: the USA/USSR pair) */
   private sidesFor(role: Side | 'SPECTATOR'): Side[] {
@@ -495,6 +510,21 @@ export class TuiApp {
         if (this.sync) this.client.focus({ lat: u.lat, lon: u.lon, zoom: Math.max(this.map.zoom, 6), unit: u.id, label: u.name });
         return this.sys(this.describeUnit(u).join('\n'), COL.magenta);
       }
+      case 'seat': {
+        const [nation, branch] = arg.split(/\s+/);
+        if (!nation) return this.sys('usage: seat <nation|watch> [commander|navy|air|rocket]', COL.dim);
+        const role = /^(watch|spectator|spec)$/i.test(nation) ? 'SPECTATOR' : nation.toUpperCase();
+        const br = (branch ?? 'commander').toLowerCase().replace('rockets', 'rocket').replace('airforce', 'air');
+        if (!['commander', 'navy', 'air', 'rocket'].includes(br)) return this.sys('branches: commander, navy, air, rocket', COL.dim);
+        this.client.takeSeat(role, br as 'commander' | 'navy' | 'air' | 'rocket');
+        return this.sys(`requesting ${role}${role === 'SPECTATOR' ? '' : ` · ${br}`}…`, COL.dim);
+      }
+      case 'start':
+        this.client.startMatch();
+        return this.sys('asking the server to start the match…', COL.dim);
+      case 'endmatch':
+        this.client.endMatch();
+        return this.sys('asking the server to end the match…', COL.dim);
       case 'intel': {
         if (!this.client.snap) return;
         for (const l of intelReport(this.client.snap)) this.sys(l, l.startsWith(" ") ? COL.text : COL.dim);

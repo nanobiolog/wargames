@@ -287,7 +287,7 @@ const ui = new Ui(document.getElementById('ui')!, {
   toggleConsole: () => konsole.toggle(),
   openSettings: () => online.openSettings(),
   onlineShare: () => online.openShare(),
-  openLobby: () => (online.available ? online.showLobby() : ui.showConnect('Paste the session link printed in your terminal.')),
+  openLobby: () => (online.openRoom() || (online.available ? online.showLobby() : ui.showConnect('Paste the session link printed in your terminal.'))),
 });
 
 const online = new Online(document.getElementById('ui')!, {

@@ -173,6 +173,20 @@ export const COMMANDS: CommandSpec[] = [
     details: 'Kinds: silo, ssbn, ssn, carrier, airbase, bomber, afb_int, radar, abm, command, navalbase.', examples: ['list silo', 'list enemy'], args: [S('kind', 'kind', { optional: true })],
   },
   {
+    verb: 'seat', scope: 'console', group: 'SESSION', syntax: 'seat <nation|watch> [commander|navy|air|rocket]',
+    summary: 'online matches: take a nation (and a branch), or watch',
+    details: 'Before the start you can pick any free nation and branch; several players can share a nation, each commanding a branch (the commander covers branches nobody holds). During a match you can take over a nation the AI is playing, change branch, or watch. "seat watch" makes you a spectator.',
+    examples: ['seat CHN', 'seat USA navy', 'seat watch'], args: [S('text', 'nation'), S('text', 'branch', { optional: true })],
+  },
+  {
+    verb: 'start', scope: 'console', group: 'SESSION', syntax: 'start', summary: 'online matches (host): start the clock',
+    details: 'Matches open in a room with the clock stopped so everyone can take a seat. The host starts them.', examples: ['start'], args: [],
+  },
+  {
+    verb: 'endmatch', scope: 'console', group: 'SESSION', syntax: 'endmatch', summary: 'online matches (host): end the match for everyone',
+    details: 'Open-ended matches keep going until one nation or alliance is left; the host can end them at any time.', examples: ['endmatch'], args: [],
+  },
+  {
     verb: 'intel', scope: 'console', group: 'INFO', syntax: 'intel', summary: 'what your radars, satellites and recon flights are tracking',
     details: 'Every known contact grouped by type (surface groups, submarines, bombers, air flights, fixed sites), when it was last seen and whether it is identified, plus your own flights in the air. Radars track aircraft and ships near the coast, satellites pass every 20 minutes, and recon sorties identify everything within ~350 km.',
     examples: ['intel'], args: [],

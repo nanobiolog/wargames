@@ -7,7 +7,7 @@
 // provider, straight from this device.
 import {
   normalizeCode, randomCallsign, cleanCallsign, shortCode, makeMatchLink,
-  type AiJob, type GameClient, type RosterEntry, type Side,
+  type AiJob, type GameClient, type LobbyState, type RosterEntry, type Side,
 } from '@coldlaunch/shared';
 import type { FxSettings } from './gl.ts';
 import QRCode from 'qrcode';
@@ -87,6 +87,10 @@ export class Online {
   private settingsBox: HTMLElement;
   private bar: HTMLElement;
   private shareBox: HTMLElement;
+  private room: HTMLElement;
+  /** the room panel is open (auto-opens in the lobby phase; the player may close it to look at the map) */
+  private roomOpen = false;
+  private lastPhase = '';
   private inbox?: WebSocket;
   private usage = { calls: 0, inTok: 0, outTok: 0, cost: 0 };
   private hb = 0;
@@ -105,7 +109,8 @@ export class Online {
     this.settingsBox = h('div', 'settings hidden');
     this.bar = h('div', 'matchbar hidden');
     this.shareBox = h('div', 'sharesheet hidden');
-    root.append(this.lobby, this.settingsBox, this.bar, this.shareBox);
+    this.room = h('div', 'lobby room hidden');
+    root.append(this.lobby, this.settingsBox, this.bar, this.shareBox, this.room);
     this.adoptPairing();
     this.applyIdentity();
 
@@ -114,6 +119,7 @@ export class Online {
     c.on('roster', (r) => this.renderBar(r));
     c.on('chat', (m) => host.toast(`${m.from} (${m.role}): ${m.text}`, 'hot'));
     c.on('welcome', () => { this.renderBar(c.roster); this.lobby.classList.add('hidden'); });
+    c.on('lobby', (st) => this.onRoom(st));
     // Heartbeat while the clock runs: keeps the match's Durable Object topped up on CPU between
     // orders. Paused or finished matches send nothing, so they can hibernate.
     window.addEventListener('resize', () => this.placeBar());
@@ -290,10 +296,8 @@ export class Online {
           <p class="hint sbrief"></p>
           <label class="row">You command <select class="side"><option>USA</option><option>USSR</option></select></label>
           <p class="hint fbrief"></p>
-          <label class="row">Opponent <select class="opp"></select></label>
-          <label class="row temp">Temperament <input type="range" class="pers" min="0" max="1" step="0.05" value="0.5"><span class="persv">balanced</span></label>
-          <label class="row">Time compression <select class="speed"><option value="5">x5</option><option value="10" selected>x10</option><option value="20">x20</option><option value="30">x30</option></select></label>
-          <button class="big create">CREATE MATCH</button>
+          <p class="hint">You get a room first: friends join and pick their nation and branch, you set the AI, speed and end rules, then press START.</p>
+          <button class="big create">CREATE ROOM</button>
         </div>
       </div>
       <div class="sec friends"></div>
@@ -308,31 +312,16 @@ export class Online {
     cs.onchange = saveName;
     q<HTMLButtonElement>('.dice').onclick = () => { cs.value = randomCallsign(); saveName(); };
     q<HTMLButtonElement>('.copytag').onclick = () => void navigator.clipboard?.writeText(this.id.tag).then(() => this.host.toast('FRIEND TAG COPIED'));
-    const pers = q<HTMLInputElement>('.pers');
-    const persv = q<HTMLElement>('.persv');
-    pers.oninput = () => { const v = +pers.value; persv.textContent = v < 0.3 ? 'dove' : v > 0.7 ? 'hawk' : 'balanced'; };
-    const opp = q<HTMLSelectElement>('.opp');
     const scSel = q<HTMLSelectElement>('.scenario');
     const sideSel = q<HTMLSelectElement>('.side');
     const fillScenario = () => {
       const sc = this.scenarios.find((x) => x.id === scSel.value) ?? this.scenarios[0];
       if (!sc) return;
-      const multi = sc.factions.length > 2;
       q<HTMLElement>('.sbrief').textContent = sc.summary;
       const keep = sideSel.value;
       sideSel.innerHTML = sc.factions.map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
       sideSel.value = sc.factions.some((f) => f.id === keep) ? keep : sc.defaultSides[0];
-      const keepOpp = opp.value || 'human';
-      opp.innerHTML = multi
-        ? `<option value="human">Friends — the AI plays every empty seat</option>
-           <option value="rules">Just me — the doctrine AI plays everyone else</option>
-           <option value="byok">My AI key plays my main adversary, doctrine AI the rest</option>`
-        : `<option value="human">A friend (share the code)</option>
-           <option value="rules">Doctrine AI (free, offline rules)</option>
-           <option value="byok">LLM AI with your own key</option>`;
-      opp.value = keepOpp;
       syncFaction();
-      syncOpp();
     };
     const syncFaction = () => {
       const sc = this.scenarios.find((x) => x.id === scSel.value);
@@ -348,12 +337,6 @@ export class Online {
       scSel.value = this.scenarios.some((x) => x.id === this.host.store.get('scenario', '1983')) ? this.host.store.get('scenario', '1983') : '1983';
       fillScenario();
     });
-    const syncOpp = () => q<HTMLElement>('.temp').classList.toggle('hidden', opp.value === 'human');
-    opp.onchange = () => {
-      syncOpp();
-      if (opp.value === 'byok' && !this.hasKey()) this.host.toast('ADD YOUR AI KEY IN SETTINGS FIRST — IT STAYS IN THIS BROWSER', 'bad');
-    };
-    syncOpp();
     const join = () => {
       saveName();
       const raw = q<HTMLInputElement>('.code').value;
@@ -366,17 +349,16 @@ export class Online {
     q<HTMLInputElement>('.code').onkeydown = (e) => { if (e.key === 'Enter') join(); };
     q<HTMLButtonElement>('.create').onclick = async () => {
       saveName();
-      if (opp.value === 'byok' && !this.hasKey()) { this.openSettings('ai'); return; }
+      const multi = (this.scenarios.find((x) => x.id === scSel.value)?.factions.length ?? 2) > 2;
       const res = await fetch('/api/match', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ scenario: scSel.value, opponent: opp.value, side: sideSel.value, speed: +q<HTMLSelectElement>('.speed').value, personality: +pers.value, name: this.id.name }),
+        body: JSON.stringify({ scenario: scSel.value, opponent: multi ? 'human' : 'rules', side: sideSel.value, name: this.id.name, player: this.id.player, endMode: 'open' }),
       });
       const m = (await res.json()) as { code?: string; error?: string };
       if (!m.code) return this.host.toast(`COULD NOT CREATE MATCH: ${m.error ?? res.status}`, 'bad');
       this.host.store.set('scenario', scSel.value);
+      this.roomOpen = true;
       await this.join(m.code, sideSel.value as Side);
-      if (opp.value === 'human') this.openShare(); // next step is always "send it to a friend"
-      else this.host.toast(`MATCH ${m.code} STARTED`, 'hot');
     };
     q<HTMLButtonElement>('.settingsbtn').onclick = () => this.openSettings();
     L.querySelector<HTMLButtonElement>('.ph .close')?.addEventListener('click', () => L.classList.add('hidden'));
@@ -532,6 +514,130 @@ export class Online {
     }
   }
 
+  // ------------------------------------------------------------------ match room (lobby before START, crews, host controls)
+
+  private onRoom(st: LobbyState) {
+    if (this.lastPhase === 'lobby' && st.phase === 'running') {
+      this.roomOpen = false;
+      this.host.toast(`MATCH STARTED — ${st.options.scenarioName}`, 'hot');
+    }
+    if (st.phase === 'lobby' && this.lastPhase !== 'lobby') this.roomOpen = true;
+    this.lastPhase = st.phase;
+    this.renderBar(this.host.client.roster);
+    if (this.roomOpen) this.renderRoom(st); else this.room.classList.add('hidden');
+  }
+
+  /** Open the match room (from LOBBY / ROOM buttons). Returns false when not in an online match. */
+  openRoom(): boolean {
+    const st = this.host.client.lobby;
+    if (!this.available || !this.host.client.match || !st) return false;
+    this.roomOpen = true;
+    this.renderRoom(st);
+    return true;
+  }
+
+  private renderRoom(st: LobbyState) {
+    const c = this.host.client;
+    const R = this.room;
+    const host = st.youAreHost;
+    const lobby = st.phase === 'lobby';
+    const o = st.options;
+    const multi = st.nations.length > 2;
+    const sc = this.scenarios;
+    const branchName: Record<string, string> = { commander: 'COMMANDER', navy: 'NAVY', air: 'AIR FORCE', rocket: 'ROCKETS' };
+    const lock = host && lobby ? '' : 'disabled';
+    const oppOptions = multi
+      ? [['human', 'Friends take seats — the AI plays every empty nation'], ['rules', 'Doctrine AI plays every empty nation'], ['byok', 'Host\'s AI key plays the main adversary, doctrine AI the rest']]
+      : [['human', 'A friend plays the other side'], ['rules', 'Doctrine AI plays the other side'], ['byok', 'LLM with the host\'s own AI key plays the other side']];
+    R.innerHTML = `
+      <div class="ph">MATCH ${esc(c.match?.code ?? '')} · ${lobby ? 'ROOM — NOT STARTED' : st.phase === 'over' ? 'FINISHED' : 'IN PROGRESS'} <button class="small close">×</button></div>
+      <div class="line"><button class="small room-invite">INVITE FRIENDS</button><button class="small gfx">SETTINGS</button><span class="hint">host: ${esc(st.host)}${host ? ' (you)' : ''}</span></div>
+      <div class="sec">
+        <div class="lbl">MATCH SETTINGS ${host && lobby ? '' : '<span class="hint">— set by the host before the start</span>'}</div>
+        <label class="row">Scenario <select class="r-scen" ${lock}>${(sc.length ? sc : [{ id: o.scenario, name: o.scenarioName, factions: [] }]).map((x) => `<option value="${x.id}" ${x.id === o.scenario ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+        <label class="row">Opponents <select class="r-opp" ${lock}>${oppOptions.map(([v, l]) => `<option value="${v}" ${v === o.opponent ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="row">AI temperament <input type="range" class="r-pers" min="0" max="1" step="0.05" value="${o.personality}" ${lock}><span class="r-persv">${o.personality < 0.3 ? 'dove' : o.personality > 0.7 ? 'hawk' : 'balanced'}</span></label>
+        <label class="row">Time compression <select class="r-speed" ${lock}>${[5, 10, 20, 30, 60].map((v) => `<option value="${v}" ${v === o.speed ? 'selected' : ''}>x${v}</option>`).join('')}</select></label>
+        <label class="row">Ending <select class="r-end" ${lock}>
+          <option value="open" ${o.endMode === 'open' ? 'selected' : ''}>Play on until one nation or alliance is left (or the host ends it)</option>
+          <option value="classic" ${o.endMode === 'classic' ? 'selected' : ''}>Classic scenario endings (time limit, crisis defused)</option>
+        </select></label>
+      </div>
+      <div class="sec nations"><div class="lbl">NATIONS — pick one and a branch; several players can share a nation</div></div>
+      <div class="sec specs"><div class="lbl">WATCHING</div><div class="speclist">${st.spectators.map((x) => `${esc(x.name)}${x.you ? ' (you)' : ''}`).join(', ') || '<span class="hint">nobody</span>'}</div>
+        <button class="small watch" ${st.you.role === 'SPECTATOR' ? 'disabled' : ''}>WATCH INSTEAD</button></div>
+      <div class="foot room-foot"></div>`;
+    const q = <T extends HTMLElement>(sel: string) => R.querySelector(sel) as T;
+    q<HTMLButtonElement>('.close').onclick = () => { this.roomOpen = false; R.classList.add('hidden'); };
+    q<HTMLButtonElement>('.room-invite').onclick = () => { this.openShare(); };
+    q<HTMLButtonElement>('.gfx').onclick = () => this.openSettings();
+    if (host && lobby) {
+      q<HTMLSelectElement>('.r-scen').onchange = (e) => c.configure({ scenario: (e.target as HTMLSelectElement).value });
+      q<HTMLSelectElement>('.r-opp').onchange = (e) => {
+        const v = (e.target as HTMLSelectElement).value as 'human' | 'rules' | 'byok';
+        if (v === 'byok' && !this.hasKey()) this.host.toast('ADD YOUR AI KEY IN SETTINGS — IT STAYS IN THIS BROWSER', 'bad');
+        c.configure({ opponent: v });
+      };
+      const pers = q<HTMLInputElement>('.r-pers');
+      pers.oninput = () => { const v = +pers.value; q<HTMLElement>('.r-persv').textContent = v < 0.3 ? 'dove' : v > 0.7 ? 'hawk' : 'balanced'; };
+      pers.onchange = () => c.configure({ personality: +pers.value });
+      q<HTMLSelectElement>('.r-speed').onchange = (e) => c.configure({ speed: +(e.target as HTMLSelectElement).value });
+      q<HTMLSelectElement>('.r-end').onchange = (e) => c.configure({ endMode: (e.target as HTMLSelectElement).value as 'open' | 'classic' });
+    }
+    // nations, crews and seat buttons
+    const box = q<HTMLElement>('.nations');
+    for (const n of st.nations) {
+      const row = h('div', `nation${n.out ? ' out' : ''}${st.you.role === n.id ? ' mine' : ''}`);
+      row.style.borderLeftColor = n.color;
+      const crew = n.crew.map((m) => `<span class="chip${m.you ? ' you' : ''}${m.online ? '' : ' away'}">${esc(m.name)} · ${branchName[m.branch]}</span>`).join(' ');
+      const status = n.out ? '<span class="tag out">OUT</span>' : n.reservedForAi ? '<span class="tag ai">AI OPPONENT</span>' : n.ai ? '<span class="tag ai">AI</span>' : '';
+      row.innerHTML = `<div class="nhead"><b style="color:${n.color}">${esc(n.name)}</b> ${status}</div><div class="hint">${esc(n.brief)}</div><div class="crew">${crew}</div>`;
+      const canSit = !n.out && !n.reservedForAi && n.playable && (lobby || n.ai || st.you.role === n.id);
+      if (canSit) {
+        const taken = new Set(n.crew.filter((m) => !m.you).map((m) => m.branch));
+        const free = (['commander', 'navy', 'air', 'rocket'] as const).filter((b) => !taken.has(b));
+        if (free.length) {
+          const line = h('div', 'line');
+          const sel = h('select') as HTMLSelectElement;
+          sel.innerHTML = free.map((b) => `<option value="${b}" ${st.you.role === n.id && st.you.branch === b ? 'selected' : ''}>${branchName[b]}</option>`).join('');
+          const btn = h('button', 'small go', st.you.role === n.id ? 'CHANGE BRANCH' : 'SIT HERE');
+          btn.onclick = () => c.takeSeat(n.id, sel.value as 'commander' | 'navy' | 'air' | 'rocket');
+          line.append(sel, btn);
+          row.append(line);
+        }
+      }
+      box.append(row);
+    }
+    q<HTMLButtonElement>('.watch').onclick = () => c.takeSeat('SPECTATOR');
+    // footer: start / end / resign
+    const foot = q<HTMLElement>('.room-foot');
+    if (host && lobby) {
+      const b = h('button', 'big create', 'START MATCH');
+      b.onclick = () => c.startMatch();
+      foot.append(b);
+    } else if (lobby) {
+      foot.append(h('p', 'hint', `Waiting for ${esc(st.host)} to start the match…`));
+    }
+    if (!lobby && st.phase !== 'over' && st.you.role !== 'SPECTATOR' && o.endMode === 'open') {
+      const b = h('button', 'danger', 'RESIGN — STAND DOWN AND WATCH');
+      b.onclick = () => { if (confirm('Your nation stands down for good and you watch the rest of the war. Resign?')) void c.cmd({ op: 'resign' }); };
+      foot.append(b);
+    }
+    if (host && !lobby) {
+      if (st.phase !== 'over') {
+        const b = h('button', 'danger', 'END MATCH FOR EVERYONE');
+        b.onclick = () => { if (confirm('End the match for everyone?')) c.endMatch(); };
+        foot.append(b);
+      }
+      const n = h('button', 'small', 'NEW MATCH (BACK TO THE ROOM)');
+      n.onclick = () => c.newGame();
+      foot.append(n);
+    }
+    if (!sc.length) void this.loadScenarios().then(() => { if (this.roomOpen && c.lobby) this.renderRoom(c.lobby); });
+    R.classList.remove('hidden');
+    this.lobby.classList.add('hidden');
+  }
+
   // ------------------------------------------------------------------ match bar
 
   private renderBar(roster: RosterEntry[]) {
@@ -555,7 +661,10 @@ export class Online {
     chat.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter' && chat.value.trim()) { c.chat(chat.value.trim()); chat.value = ''; } };
     const inv = h('button', 'small invitebtn', 'INVITE');
     inv.onclick = () => { this.openShare(); };
-    this.bar.append(chat, inv);
+    const roomBtn = h('button', 'small roombtn', c.lobby?.phase === 'lobby' ? 'ROOM ●' : 'ROOM');
+    roomBtn.title = 'Seats, branches, match settings, start / end';
+    roomBtn.onclick = () => { this.openRoom(); };
+    this.bar.append(chat, inv, roomBtn);
     this.bar.classList.remove('hidden');
     this.placeBar();
   }

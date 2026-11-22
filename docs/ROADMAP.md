@@ -94,7 +94,9 @@ and per-viewport interest management.
 | system | gameplay | notes |
 |---|---|---|
 | ✅ **Carrier air wings** | `sortie` recon / CAP / strike from carriers and fighter bases; surface warfare; coastal radar ship tracking; intel summaries and `intel` | built in both scenarios |
-| **Reconnaissance satellites** | orbital passes (real ground tracks from simple two-line elements), revisit times, cloud cover; reveal ships and mobile launchers | replaces today's fixed 20-minute satellite pass |
+| ✅ **Satellites, drones, cruise missiles** | orbital recon passes, ISR drones and attack swarms, low-level cruise missiles with saturation-limited point defence | built |
+| ✅ **Match rooms, branches, open-ended wars** | pre-game room with host START, nations shared by branch, elimination → spectators, host END | built |
+| **Reconnaissance satellites (more)** | orbital passes (real ground tracks from simple two-line elements), revisit times, cloud cover; reveal ships and mobile launchers | replaces today's fixed 20-minute satellite pass |
 | **Drones** | MALE ISR drones (loiter, spot), loitering munitions (cheap, slow, interceptable) | swarms stress air defence; cost/benefit decisions |
 | **Cruise missiles** | ship-, sub-, air- and ground-launched; low-altitude terrain-following paths (reuse ocean/land routing); radar horizon | new `Missile.type = 'CRUISE'` with waypoints |
 | **Surface navy** | destroyers and frigates with area air defence, SSGNs, amphibious groups | existing carrier logic generalises |

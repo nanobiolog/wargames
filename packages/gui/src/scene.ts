@@ -24,7 +24,7 @@ export type LayerKey =
 /** Service-branch filters: which unit kinds each branch layer controls. */
 export const BRANCH_KINDS: Record<'navy' | 'air' | 'rocket' | 'ground', string[]> = {
   navy: ['carrier', 'ssbn', 'ssn', 'navalbase'],
-  air: ['airbase', 'afb_int', 'bomber', 'flight'],
+  air: ['airbase', 'afb_int', 'bomber', 'flight', 'satellite'],
   rocket: ['silo', 'abm'],
   ground: ['command', 'radar'],
 };
@@ -82,6 +82,12 @@ const ICONS: Record<string, Pt[][]> = {
     [[0, -0.6], [0, 0.4]],
   ],
   // airborne bomber group (rotated to heading; nose = +x)
+  // reconnaissance satellite: body with two solar panels
+  satellite: [
+    [[-0.35, -0.35], [0.35, -0.35], [0.35, 0.35], [-0.35, 0.35], [-0.35, -0.35]],
+    [[-1.5, -0.25], [-0.55, -0.25], [-0.55, 0.25], [-1.5, 0.25], [-1.5, -0.25]], [[-0.55, 0], [-0.35, 0]],
+    [[0.55, -0.25], [1.5, -0.25], [1.5, 0.25], [0.55, 0.25], [0.55, -0.25]], [[0.35, 0], [0.55, 0]],
+  ],
   // air flight: a pair of small swept-wing jets (drawn pointing east, rotated to heading)
   flight: [
     [[-0.9, -0.55], [0.2, -0.55]], [[-0.35, -1.0], [0.0, -0.55], [-0.35, -0.1]], [[-0.85, -0.75], [-0.85, -0.35]],
@@ -200,6 +206,8 @@ export function buildWorld(b: DynBatch, st: SceneState) {
   for (const u of snap.units) {
     if (u.status === 'destroyed') continue;
     if (L.radar && u.radarKm) polyLL(b, geoCircle(u, u.radarKm, 90), dimC(sideCol(u.side), 0.25), lw, 2);
+    // what a reconnaissance satellite sees right now
+    if (L.radar && u.kind === 'satellite' && u.swathKm) polyLL(b, geoCircle(u, u.swathKm, 48), dimC(sideCol(u.side), 0.35), lw, 2);
     if (L.airdef && u.defenceKm && (u.kind === 'afb_int' || u.kind === 'carrier' || u.kind === 'abm')) polyLL(b, geoCircle(u, u.defenceKm, 60), dimC(sideCol(u.side), 0.3), lw);
   }
 

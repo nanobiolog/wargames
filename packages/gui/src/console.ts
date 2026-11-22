@@ -308,6 +308,21 @@ export class Console {
         if (d) for (const l of d.lines) this.print(`${l.label.padEnd(11)} ${l.value}`, 'c-magenta');
         return this.host.flyTo(p.lat, p.lon, undefined, p.name);
       }
+      case 'seat': {
+        const [nation, branch] = arg.split(/\s+/);
+        if (!nation) return this.print('usage: seat <nation|watch> [commander|navy|air|rocket]', 'c-dim');
+        const role = /^(watch|spectator|spec)$/i.test(nation) ? 'SPECTATOR' : nation.toUpperCase();
+        const br = (branch ?? 'commander').toLowerCase().replace('rockets', 'rocket').replace('airforce', 'air');
+        if (!['commander', 'navy', 'air', 'rocket'].includes(br)) return this.print('branches: commander, navy, air, rocket', 'c-dim');
+        c.takeSeat(role, br as 'commander' | 'navy' | 'air' | 'rocket');
+        return this.print(`requesting ${role}${role === 'SPECTATOR' ? '' : ` · ${br}`}…`, 'c-dim');
+      }
+      case 'start':
+        c.startMatch();
+        return this.print('asking the server to start the match…', 'c-dim');
+      case 'endmatch':
+        c.endMatch();
+        return this.print('asking the server to end the match…', 'c-dim');
       case 'intel': {
         if (!c.snap) return;
         for (const l of intelReport(c.snap)) this.print(l, l.startsWith(' ') ? '' : 'c-magenta');
