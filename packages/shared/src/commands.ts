@@ -6,6 +6,8 @@ export type ArgKind =
   | 'airbase' // own bomber base with aircraft
   | 'bomber' // own airborne bomber group
   | 'airwing' // own carrier or fighter base with aircraft
+  | 'dronebase' // own base / carrier with drones
+  | 'cruiseunit' // own surface group or attack sub with cruise missiles
   | 'mission' // recon | cap | strike
   | 'mobile' // own ship / sub / bomber group
   | 'ownunit' // any own unit
@@ -73,6 +75,28 @@ export const COMMANDS: CommandSpec[] = [
       'Flights come home when fuel runs low; recall brings them back early. Shortcuts: recon <carrier> to <place>, cap <carrier> [over <place>], airstrike <carrier> at <target>.',
     examples: ['recon cvbg-midway to sea of okhotsk', 'cap cvbg-eisenhower', 'airstrike cvbg-americas at sag-kirov x 10', 'sortie afb-elmendorf recon to bering sea'],
     args: [S('airwing', 'carrier'), S('mission', 'recon|cap|strike'), K('to', true), S('target', 'place', { multi: true, optional: true })],
+  },
+  {
+    verb: 'drone', aliases: ['swarm'], scope: 'game', group: 'ORDERS',
+    syntax: 'drone <base> to <place>  ·  drone <base> attack <target> [x N]',
+    summary: 'ISR drones that watch an area for hours, or one-way attack-drone swarms',
+    details: 'ISR drone (any DEFCON): flies slowly to a point and circles it until its fuel runs low (many hours), identifying ships and aircraft within ~250 km. Cheap, unmanned and easy to shoot down: hostile air defence fires on it from DEFCON 4. ' +
+      'Attack swarm (DEFCON 2): one-way loitering munitions flown at a ship group or base; most are shot down by its air defence, each survivor does a little damage. Only bases and carriers that carry drones (modern scenario) can launch them.',
+    examples: ['drone m-int-kadena to east china sea', 'drone m-ab-engels attack m-csg-qe x 20'],
+    args: [S('dronebase', 'base'), K('to', true), S('place', 'place', { multi: true })],
+  },
+  {
+    verb: 'cruise', scope: 'game', group: 'ORDERS', syntax: 'cruise <surface group|attack sub> at <target> [x N]',
+    summary: 'conventional cruise missiles at a military target',
+    details: 'Fires N (default 4) subsonic, low-flying cruise missiles from a surface group or attack submarine at a ship group or base within range (1 200-1 600 km). They are not seen by satellites; only radars, fighters and ships close to their track pick them up, and air defence can shoot them down on the way. A ship target must still be near the aim point when they arrive. Firing reveals a submarine for a while. Requires DEFCON 2.',
+    examples: ['cruise m-csg-ford at m-sag-northern x 8', 'cruise ssn-memphis at nb-severomorsk'],
+    args: [S('cruiseunit', 'launcher'), K('at'), S('target', 'target', { multi: true })],
+  },
+  {
+    verb: 'resign', aliases: ['concede'], scope: 'game', group: 'ORDERS', syntax: 'resign',
+    summary: 'stand down for good and watch the rest of the war',
+    details: 'In open-ended matches your nation leaves the war: its forces stand down and you (and everyone on your side) become spectators. The match goes on for the others.',
+    examples: ['resign'], args: [],
   },
   {
     verb: 'scramble', scope: 'game', group: 'ORDERS', syntax: 'scramble <base> [N] [to <place>]',

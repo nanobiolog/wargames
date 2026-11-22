@@ -53,6 +53,10 @@ function candidatesFor(kind: ArgKind | undefined, ctx: SuggestCtx): string[] {
       return own(ctx).filter((u) => (u.kind === 'carrier' || u.kind === 'afb_int') && (u.interceptors ?? 0) > 0).map((u) => u.id);
     case 'mission':
       return ['recon', 'cap', 'strike'];
+    case 'dronebase':
+      return own(ctx).filter((u) => (u.drones ?? 0) > 0).map((u) => u.id);
+    case 'cruiseunit':
+      return own(ctx).filter((u) => (u.cruise ?? 0) > 0).map((u) => u.id);
     case 'mobile':
       return own(ctx).filter((u) => u.kind === 'carrier' || u.kind === 'ssbn' || u.kind === 'ssn' || u.kind === 'bomber').map((u) => u.id);
     case 'ownunit':

@@ -191,9 +191,29 @@ const SU_NAVY: U[] = [
   fleet('USSR', 'sag-northern', 'NORTHERN FLEET SAG', 70.0, 36.0, 'SLAVA', 'nb-severomorsk', 12),
 ];
 
+
+// ---------------------------------------------------------------- reconnaissance satellites (circular orbits; ground tracks computed by the engine)
+const sat = (side: Side, id: string, name: string, cls: string, incDeg: number, periodSec: number, raanDeg: number, phaseDeg: number, swathKm: number) =>
+  ({ id, name, side, kind: 'satellite' as const, lat: 0, lon: 0, cls, orbit: { incDeg, periodSec, raanDeg, phaseDeg }, swathKm });
+
+const SATS_1983: U[] = [
+  sat('USA', 'sat-kh11-a', 'KH-11 KENNEN (A)', 'KH-11 IMAGING', 97.0, 5580, 40, 0, 450),
+  sat('USA', 'sat-kh11-b', 'KH-11 KENNEN (B)', 'KH-11 IMAGING', 97.0, 5580, 160, 120, 450),
+  sat('USSR', 'sat-yantar', 'YANTAR-2K', 'YANTAR PHOTO-RECON', 67.0, 5350, 250, 60, 400),
+  sat('USSR', 'sat-usa-rorsat', 'US-A (RORSAT)', 'US-A OCEAN RADAR', 65.0, 5300, 330, 200, 450),
+];
+
+/** Conventional cruise missiles aboard (game-scaled; 1983 Tomahawk was just entering service). */
+const CRUISE_1983: Record<string, Partial<Unit>> = {
+  'cvbg-eisenhower': { cruise: 8, cruiseRangeKm: 1300 }, 'cvbg-americas': { cruise: 8, cruiseRangeKm: 1300 },
+  'cvbg-midway': { cruise: 6, cruiseRangeKm: 1300 }, 'cvbg-enterprise': { cruise: 8, cruiseRangeKm: 1300 },
+  'sag-kirov': { cruise: 20, cruiseRangeKm: 600 }, 'sag-kiev': { cruise: 8, cruiseRangeKm: 550 }, 'sag-minsk': { cruise: 8, cruiseRangeKm: 550 },
+  'sag-northern': { cruise: 16, cruiseRangeKm: 550 },
+};
+
 export function buildUnits(): Unit[] {
-  const all = [...US_ICBM, ...SU_ICBM, ...US_BOMBERS, ...SU_BOMBERS, ...US_AD, ...SU_AD, ...US_RADAR, ...SU_RADAR, ...US_C2, ...SU_C2, ...US_NAVY, ...SU_NAVY];
-  return all.map((u) => ({ status: 'ready', hp: 1, ...u }) as Unit);
+  const all = [...SATS_1983, ...US_ICBM, ...SU_ICBM, ...US_BOMBERS, ...SU_BOMBERS, ...US_AD, ...SU_AD, ...US_RADAR, ...SU_RADAR, ...US_C2, ...SU_C2, ...US_NAVY, ...SU_NAVY];
+  return all.map((u) => ({ status: 'ready', hp: 1, ...u, ...(CRUISE_1983[u.id] ?? {}) }) as Unit);
 }
 
 // ---------------------------------------------------------------- cities (pop in thousands, c.1983)

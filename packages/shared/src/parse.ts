@@ -73,6 +73,23 @@ export function parseCommandLine(line: string): ParseResult {
       if (mission === 'recon' && !to) return { kind: 'error', msg: 'usage: recon <carrier|fighter base> to <place> [x N]' };
       return { kind: 'cmd', cmd: { op: 'sortie', from, mission: mission as 'recon' | 'cap' | 'strike', to, count: cnt ? +cnt[1] : undefined } };
     }
+    case 'cruise': {
+      // cruise <ship|sub> at <target> [x N]
+      const m = args.match(/^(\S+)\s+(?:at|->|on)\s+(.+?)(?:\s+x\s*(\d+))?$/i);
+      if (!m) return { kind: 'error', msg: 'usage: cruise <surface group|attack sub> at <target> [x N]' };
+      return { kind: 'cmd', cmd: { op: 'cruise', from: m[1], target: strip(m[2]), count: m[3] ? +m[3] : undefined } };
+    }
+    case 'drone':
+    case 'swarm': {
+      // drone <base> to <place>  ·  drone <base> attack <target> [x N]  ·  swarm <base> at <target> [x N]
+      const m = args.match(/^(\S+)\s+(to|over|attack|at|->)\s+(.+?)(?:\s+x\s*(\d+))?$/i);
+      if (!m) return { kind: 'error', msg: 'usage: drone <base> to <place>  ·  drone <base> attack <target> [x N]' };
+      const attack = verb === 'swarm' || /^(attack|at)$/i.test(m[2]);
+      return { kind: 'cmd', cmd: { op: 'sortie', from: m[1], mission: attack ? 'swarm' : 'drone', to: strip(m[3]), count: m[4] ? +m[4] : undefined } };
+    }
+    case 'resign':
+    case 'concede':
+      return { kind: 'cmd', cmd: { op: 'resign' } };
     case 'recall': {
       if (!args) return { kind: 'error', msg: 'usage: recall <bomber>' };
       return { kind: 'cmd', cmd: { op: 'recall', unit: args.split(/\s+/)[0] } };
@@ -119,5 +136,7 @@ export function describeCommand(c: Command): string {
     case 'pause': return c.value === false ? 'RESUME' : 'PAUSE';
     case 'hotline': return `HOTLINE: "${c.text}"`;
     case 'hold': return `HOLD${c.note ? ` (${c.note})` : ''}`;
+    case 'cruise': return `CRUISE MISSILES ${c.count ?? 4} FROM ${c.from.toUpperCase()} → ${c.target.toUpperCase()}`;
+    case 'resign': return 'STAND DOWN AND LEAVE THE WAR';
   }
 }

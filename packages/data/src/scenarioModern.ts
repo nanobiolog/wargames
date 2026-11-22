@@ -158,6 +158,46 @@ const IND: U[] = [
   fleet('IND', 'm-csg-vikramaditya', 'INS VIKRAMADITYA GROUP', 14.0, 86.0, 'MODIFIED KIEV / MIG-29K', 'm-nb-vizag', 14),
 ];
 
+
+// ---------------------------------------------------------------- reconnaissance satellites (circular orbits; ground tracks computed by the engine)
+const sat = (side: Side, id: string, name: string, cls: string, incDeg: number, periodSec: number, raanDeg: number, phaseDeg: number, swathKm: number) =>
+  ({ id, name, side, kind: 'satellite' as const, lat: 0, lon: 0, cls, orbit: { incDeg, periodSec, raanDeg, phaseDeg }, swathKm });
+
+const SATS: U[] = [
+  sat('USA', 'm-sat-kh11-1', 'KH-11 BLOCK IV (1)', 'ELECTRO-OPTICAL', 97.9, 5700, 30, 0, 500),
+  sat('USA', 'm-sat-kh11-2', 'KH-11 BLOCK IV (2)', 'ELECTRO-OPTICAL', 97.9, 5700, 150, 120, 500),
+  sat('USA', 'm-sat-kh11-3', 'KH-11 BLOCK IV (3)', 'ELECTRO-OPTICAL', 97.9, 5700, 270, 240, 500),
+  sat('USA', 'm-sat-noss', 'NOSS OCEAN SURVEILLANCE', 'SIGINT TRIPLET', 63.4, 6600, 200, 60, 650),
+  sat('EUR', 'm-sat-cso-1', 'CSO-1', 'ELECTRO-OPTICAL', 98.0, 5900, 80, 30, 400),
+  sat('EUR', 'm-sat-cso-2', 'CSO-2', 'ELECTRO-OPTICAL', 98.0, 5900, 260, 210, 400),
+  sat('RUS', 'm-sat-bars', 'BARS-M', 'ELECTRO-OPTICAL', 97.6, 5600, 120, 90, 450),
+  sat('RUS', 'm-sat-pion', 'PION-NKS', 'OCEAN RADAR / SIGINT', 67.1, 5700, 310, 180, 600),
+  sat('CHN', 'm-sat-yaogan-a', 'YAOGAN-30 (A)', 'SIGINT TRIPLET', 35.0, 5900, 0, 0, 600),
+  sat('CHN', 'm-sat-yaogan-b', 'YAOGAN-30 (B)', 'SIGINT TRIPLET', 35.0, 5900, 120, 120, 600),
+  sat('CHN', 'm-sat-yaogan-c', 'YAOGAN-30 (C)', 'SIGINT TRIPLET', 35.0, 5900, 240, 240, 600),
+  sat('CHN', 'm-sat-gaofen', 'GAOFEN-11', 'ELECTRO-OPTICAL', 97.5, 5700, 60, 300, 400),
+  sat('IND', 'm-sat-risat', 'RISAT-2BR', 'RADAR IMAGING', 37.0, 5700, 150, 90, 450),
+];
+
+/** Drones at bases (ISR and attack) and cruise missiles aboard ships and subs (game-scaled). */
+const EXTRAS: Record<string, Partial<Unit>> = {
+  'm-afb-andersen': { drones: 4 }, 'm-int-kadena': { drones: 4 }, 'm-int-elmendorf': { drones: 2 }, 'm-int-langley': { drones: 2 },
+  'm-int-coningsby': { drones: 3 }, 'm-int-mont': { drones: 3 },
+  'm-int-chkalovsk': { drones: 6 }, 'm-ab-engels': { drones: 30 }, 'm-int-yelizovo': { drones: 4 },
+  'm-int-wuyishan': { drones: 8 }, 'm-int-suixi': { drones: 24 }, 'm-int-anshan': { drones: 6 },
+  'm-int-pune': { drones: 4 }, 'm-int-tezpur': { drones: 6 },
+  'm-csg-reagan': { cruise: 24, cruiseRangeKm: 1600 }, 'm-csg-ford': { cruise: 24, cruiseRangeKm: 1600 },
+  'm-csg-lincoln': { cruise: 24, cruiseRangeKm: 1600 }, 'm-csg-roosevelt': { cruise: 20, cruiseRangeKm: 1600 },
+  'm-ssn-virginia': { cruise: 12, cruiseRangeKm: 1600 }, 'm-ssn-indiana': { cruise: 12, cruiseRangeKm: 1600 }, 'm-ssn-delaware': { cruise: 12, cruiseRangeKm: 1600 },
+  'm-csg-cdg': { cruise: 8, cruiseRangeKm: 1000 }, 'm-csg-qe': { cruise: 8, cruiseRangeKm: 1000 },
+  'm-ssn-astute': { cruise: 8, cruiseRangeKm: 1600 }, 'm-ssn-suffren': { cruise: 6, cruiseRangeKm: 1000 },
+  'm-sag-northern': { cruise: 16, cruiseRangeKm: 1500 }, 'm-sag-pacific': { cruise: 12, cruiseRangeKm: 1500 },
+  'm-ssn-kazan': { cruise: 16, cruiseRangeKm: 1500 }, 'm-ssn-novosibirsk': { cruise: 16, cruiseRangeKm: 1500 },
+  'm-csg-shandong': { cruise: 12, cruiseRangeKm: 800, drones: 4 }, 'm-csg-liaoning': { cruise: 12, cruiseRangeKm: 800 }, 'm-csg-fujian': { cruise: 16, cruiseRangeKm: 800, drones: 4 },
+  'm-ssn-shang1': { cruise: 6, cruiseRangeKm: 800 }, 'm-ssn-shang2': { cruise: 6, cruiseRangeKm: 800 },
+  'm-csg-vikrant': { cruise: 8, cruiseRangeKm: 450 }, 'm-csg-vikramaditya': { cruise: 8, cruiseRangeKm: 450 },
+};
+
 // ---------------------------------------------------------------- cities (pop in thousands, metro, rounded)
 const C = (side: Side | 'OTHER', name: string, lat: number, lon: number, pop: number): City => ({
   id: `city-${name.toLowerCase().replace(/[^a-z]+/g, '')}`, name: name.toUpperCase(), side, lat, lon, pop, killed: 0,
@@ -264,7 +304,7 @@ export const MODERN: ScenarioDef = {
     'ALL FORCES AT DEFCON 5. RECON SORTIES (recon <carrier> to <place>) SHOW YOU WHO IS WHERE. TYPE "help" FOR ORDERS.',
   ],
   incidents: INCIDENTS,
-  units: () => [...USA, ...EUR, ...RUS, ...CHN, ...IND].map((u) => ({ status: 'ready', hp: 1, ...u }) as Unit),
+  units: () => [...SATS, ...USA, ...EUR, ...RUS, ...CHN, ...IND].map((u) => ({ status: 'ready', hp: 1, ...u, ...(EXTRAS[u.id] ?? {}) }) as Unit),
   cities: () => CITIES.map((c) => ({ ...c })),
   seaAreas: SEA_AREAS,
 };

@@ -57,6 +57,7 @@ export const KIND_LABEL: Record<UnitKind, string> = {
   ssbn: 'SSBN',
   ssn: 'SSN',
   flight: 'AIR FLIGHT',
+  satellite: 'RECON SATELLITE',
 };
 
 /** Glyph used by the terminal map for each kind. */
@@ -73,6 +74,7 @@ export const KIND_GLYPH: Record<UnitKind, string> = {
   ssbn: '◒',
   ssn: '◓',
   flight: '⌃',
+  satellite: '✦',
 };
 
 /** Phosphor palette — shared between terminal and GUI. */

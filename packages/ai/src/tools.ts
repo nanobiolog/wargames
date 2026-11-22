@@ -73,16 +73,29 @@ export const GAME_TOOLS: ToolSpec[] = [
   },
   {
     name: 'air_sortie',
-    description: 'Launch jets from one of your carrier groups or fighter bases. recon (any DEFCON): search ~350 km around a point and identify ships and aircraft. cap (DEFCON 4 or lower): combat air patrol that shoots down hostile bombers and recon flights at DEFCON 3. strike (DEFCON 2): conventional raid on an enemy ship group or base. Aircraft sent away no longer defend the group. Combat radius 1500 km.',
+    description: 'Launch jets or drones from one of your carrier groups or bases. recon (any DEFCON): jets search ~350 km around a point and identify ships and aircraft. cap (DEFCON 4 or lower): combat air patrol that shoots down hostile bombers and recon flights at DEFCON 3. strike (DEFCON 2): conventional jet raid on an enemy ship group or base (radius 1500 km). drone (any DEFCON, bases with drones): an ISR drone that circles a point for hours. swarm (DEFCON 2, bases with drones): one-way attack drones at a ship group or base (2500 km).',
     parameters: {
       type: 'object',
       properties: {
         from: { type: 'string', description: 'your carrier group or fighter base id, e.g. cvbg-midway' },
-        mission: { type: 'string', description: 'recon | cap | strike', enum: ['recon', 'cap', 'strike'] },
+        mission: { type: 'string', description: 'recon | cap | strike | drone | swarm', enum: ['recon', 'cap', 'strike', 'drone', 'swarm'] },
         to: { type: 'string', description: 'place, sea area, "lat,lon", or (strike) an enemy unit id; cap defaults to over the carrier' },
         count: { type: 'integer', description: 'aircraft (default recon 2, cap 4, strike 8)', minimum: 1, maximum: 40 },
       },
       required: ['from', 'mission'],
+    },
+  },
+  {
+    name: 'cruise_missiles',
+    description: 'Fire conventional cruise missiles from one of your surface groups or attack submarines at an enemy ship group or base within range (DEFCON 2). They fly low and are seen only by radars near their track; air defence can shoot them down; a ship must still be near the aim point when they arrive.',
+    parameters: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'your surface group or attack submarine id' },
+        target: { type: 'string', description: 'enemy unit id from the situation report' },
+        count: { type: 'integer', description: 'missiles (default 4)', minimum: 1, maximum: 32 },
+      },
+      required: ['from', 'target'],
     },
   },
   {
@@ -115,9 +128,10 @@ export function toolCallToCommand(c: ToolCall): Command | null {
     case 'move_unit': return { op: 'move', unit: str(a.unit), to: str(a.destination) };
     case 'air_sortie': {
       const m = str(a.mission).toLowerCase();
-      if (m !== 'recon' && m !== 'cap' && m !== 'strike') return null;
+      if (m !== 'recon' && m !== 'cap' && m !== 'strike' && m !== 'drone' && m !== 'swarm') return null;
       return { op: 'sortie', from: str(a.from), mission: m, to: a.to ? str(a.to) : undefined, count: int(a.count) };
     }
+    case 'cruise_missiles': return { op: 'cruise', from: str(a.from), target: str(a.target), count: int(a.count) };
     case 'hotline_message': return { op: 'hotline', text: str(a.text).slice(0, 600), to: a.to ? str(a.to).toUpperCase() : undefined };
     case 'hold': return { op: 'hold', note: a.reason ? str(a.reason).slice(0, 300) : undefined };
     default: return null;

@@ -19,7 +19,7 @@ describe('AI tool mapping', () => {
     const samples: Record<string, Record<string, unknown>> = {
       set_defcon: { level: 3 }, launch_missiles: { from: 'icbm-minot', target: 'moscow', count: 2 }, scramble_bombers: { base: 'afb-loring' },
       bomber_strike: { group: 'bmr-loring-1', target: 'moscow' }, recall_bombers: { group: 'bmr-loring-1' }, move_unit: { unit: 'ssn-memphis', destination: 'barents sea' },
-      hotline_message: { text: 'we seek calm' }, hold: {}, air_sortie: { from: 'cvbg-midway', mission: 'recon', to: 'sea of japan' },
+      hotline_message: { text: 'we seek calm' }, hold: {}, air_sortie: { from: 'cvbg-midway', mission: 'recon', to: 'sea of japan' }, cruise_missiles: { from: 'cvbg-midway', target: 'sag-minsk' },
     };
     for (const t of GAME_TOOLS) expect(toolCallToCommand({ name: t.name, args: samples[t.name] })).not.toBeNull();
     expect(toolCallToCommand({ name: 'nuke_everything', args: {} })).toBeNull();

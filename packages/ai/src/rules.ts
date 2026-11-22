@@ -13,6 +13,8 @@ export class RuleBrain {
   /** per carrier / fighter base: last recon and strike launch (game time) */
   private lastRecon = new Map<string, number>();
   private lastAirStrike = new Map<string, number>();
+  private lastDrone = new Map<string, number>();
+  private lastCruise = new Map<string, number>();
   private world?: StaticWorld;
 
   constructor(private side: Side, private personality = 0.5, seed = 7) {
@@ -150,6 +152,30 @@ export class RuleBrain {
           this.lastRecon.set(w.id, s.t);
           cmds.push({ op: 'sortie', from: w.id, mission: 'recon', to, count: 2 });
         }
+      }
+    }
+    // drones: ISR patrols once tension rises; swarms and cruise missiles once shooting has started
+    const canHit = own <= 2 && (this.atWar || (this.personality > 0.8 && s.tension > 85));
+    const hostileBases = s.contacts.filter((c) => c.status !== 'destroyed' && foes.has(c.side) && ['airbase', 'afb_int', 'navalbase', 'radar'].includes(c.kind));
+    for (const b of live.filter((u) => (u.drones ?? 0) > 0)) {
+      const airborne = flights.some((f) => f.home === b.id && f.mission === 'drone');
+      if (canHit && (b.drones ?? 0) >= 6 && s.t - (this.lastDrone.get(b.id) ?? -1e9) > 2400) {
+        const t = nearest(b, hostileShips, 2400) ?? nearest(b, hostileBases, 2400);
+        if (t) { this.lastDrone.set(b.id, s.t); cmds.push({ op: 'sortie', from: b.id, mission: 'swarm', to: t.id, count: Math.min(16, b.drones ?? 0) }); continue; }
+      }
+      if (own <= 4 && !airborne && s.t - (this.lastDrone.get(b.id) ?? -1e9) > 3600) {
+        const seas = (this.world?.seaAreas ?? []).filter((a) => { const d = distKm(b, a); return d > 200 && d < 2500; });
+        const stale = nearest(b, s.contacts.filter((c) => c.kind === 'carrier' && foes.has(c.side) && c.status !== 'destroyed'), 2500);
+        const to = stale ? `${stale.lat.toFixed(2)},${stale.lon.toFixed(2)}` : seas.length ? seas[this.rng.int(0, seas.length - 1)].name : null;
+        if (to) { this.lastDrone.set(b.id, s.t); cmds.push({ op: 'sortie', from: b.id, mission: 'drone', to, count: 1 }); }
+      }
+    }
+    if (canHit) {
+      for (const u of live.filter((x) => (x.cruise ?? 0) >= 4)) {
+        if (s.t - (this.lastCruise.get(u.id) ?? -1e9) < 1800) continue;
+        const range = u.cruiseRangeKm ?? 1200;
+        const t = nearest(u, hostileShips, range) ?? nearest(u, hostileBases, range);
+        if (t) { this.lastCruise.set(u.id, s.t); cmds.push({ op: 'cruise', from: u.id, target: t.id, count: Math.min(8, u.cruise ?? 0) }); }
       }
     }
     return cmds;

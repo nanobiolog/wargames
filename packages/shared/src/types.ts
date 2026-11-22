@@ -86,12 +86,18 @@ export type UnitKind =
   | 'carrier' // carrier / surface action group
   | 'ssbn' // ballistic missile submarine
   | 'ssn' // attack submarine
-  | 'flight'; // airborne fighter / recon / strike flight from a carrier or fighter base
+  | 'flight' // airborne fighter / recon / strike flight, ISR drone or attack-drone swarm
+  | 'satellite'; // reconnaissance satellite in orbit (moves on its ground track, sees a swath below it)
 
 export const MOBILE_KINDS: UnitKind[] = ['bomber', 'carrier', 'ssbn', 'ssn', 'flight'];
 
 /** Air missions flown from carriers and fighter bases. */
-export type AirMission = 'recon' | 'cap' | 'strike';
+export type AirMission = 'recon' | 'cap' | 'strike' | 'drone' | 'swarm';
+
+/** Command branches a nation can be split into between several players. */
+export type Branch = 'commander' | 'navy' | 'air' | 'rocket';
+export const BRANCHES: Branch[] = ['commander', 'navy', 'air', 'rocket'];
+export const BRANCH_LABEL: Record<Branch, string> = { commander: 'COMMANDER', navy: 'NAVY', air: 'AIR FORCE', rocket: 'ROCKET FORCES' };
 
 export type UnitStatus =
   | 'ready'
@@ -141,6 +147,14 @@ export interface Unit extends LatLon {
   mission?: AirMission;
   /** recon flights: leave the search area at this game time */
   loiterUntil?: number;
+  /** drones available at a base / carrier */
+  drones?: number;
+  /** conventional cruise missiles aboard (surface groups, attack submarines) */
+  cruise?: number;
+  cruiseRangeKm?: number;
+  /** satellites: circular orbit and the width of ground they see */
+  orbit?: { incDeg: number; periodSec: number; raanDeg: number; phaseDeg: number };
+  swathKm?: number;
 }
 
 /** What the other side knows about one of your units. */
@@ -157,7 +171,7 @@ export interface Contact extends LatLon {
   hp?: number;
 }
 
-export type MissileType = 'ICBM' | 'SLBM' | 'ABM';
+export type MissileType = 'ICBM' | 'SLBM' | 'ABM' | 'CRUISE';
 
 export interface Missile {
   id: string;
@@ -257,6 +271,10 @@ export interface Snapshot {
   score: Record<Side, SideScore>;
   ai: Partial<Record<Side, AiStatus>>;
   over: null | { winner: Side | 'NONE'; reason: string };
+  /** nations that are out of the war (eliminated or resigned); their players watch */
+  out?: Side[];
+  /** milestones already announced in open-ended games (crisis defused, scenario time reached) */
+  milestones?: string[];
   threat: { inbound: number; impacts: number; bombers: number; subs: number };
 }
 
